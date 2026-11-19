@@ -12,6 +12,7 @@ overlapping entries the last one out is not necessarily the first one in.
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
@@ -96,10 +97,15 @@ class Platform:
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator["Platform"]:
-        if self._lock is None:
-            self._lock = anyio.Lock()
-        lock = self._lock
-        async with lock:
+        while True:
+            if self._lock is None:
+                self._lock = anyio.Lock()
+            lock = self._lock
+            await lock.acquire()
+            if self._lock is lock:
+                break
+            lock.release()  # the platform stopped and dropped this lock while we waited: start over
+        try:
             self._refs += 1
             if self._refs == 1:
                 try:
@@ -108,7 +114,10 @@ class Platform:
                     self._refs -= 1
                     with anyio.CancelScope(shield=True):
                         await self._stop()
+                    self._lock = None
                     raise
+        finally:
+            lock.release()
         try:
             yield self
         finally:
@@ -125,6 +134,10 @@ class Platform:
         await self.store.open()
         self.blobs = LocalBlobStore(self.data.blobs)
         self.media = MediaService(self.store, self.blobs, self.clock)
+        try:  # partial downloads left behind by a killed process
+            await self.blobs.sweep_temp(older_than_seconds=3600, now=time.time())
+        except OSError:
+            logger.debug("could not sweep temporary blobs", exc_info=True)
         roots = validate_roots([self.data.inbox, *self.settings.import_root_paths]) if self.expose_local_paths else ()
         self.importer = MediaImporter(self.media, self.fetcher, roots=roots)
 
@@ -197,13 +210,15 @@ class Platform:
         service, self._service = self._service, None
         if service is not None:
             self._stop_event.set()
-            with anyio.move_on_after(self.settings.shutdown_grace_seconds):
-                try:
-                    await service
-                except Exception:
-                    logger.exception("job runner stopped with an error")
-            if not service.done():
+            # asyncio.wait does not cancel the task on timeout, and it returns even while the
+            # runner is inside a shielded provider call. Stopping must stay quick: a job cut
+            # off here keeps its lease and is closed (and refunded) by the next process.
+            done, _ = await asyncio.wait({service}, timeout=self.settings.shutdown_grace_seconds)
+            if not done:
                 service.cancel()
+                done, _ = await asyncio.wait({service}, timeout=0.2)
+            if done and not service.cancelled() and service.exception() is not None:
+                logger.error("job runner stopped with an error", exc_info=service.exception())
         self.started = False
         if getattr(self, "store", None) is not None:
             await self.store.close()

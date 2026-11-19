@@ -1,5 +1,6 @@
 """Generate family: create generation jobs."""
 
+import logging
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context
@@ -11,6 +12,8 @@ from mcp_tools.core.jobs.service import MAX_BATCH, GenerationRequest, Outcome
 from mcp_tools.server.envelope import ok, platform_of
 from mcp_tools.server.params import GenerateParams, NextStep, Wire
 from mcp_tools.server.registry import ToolDef
+
+logger = logging.getLogger(__name__)
 
 
 class JobRef(Wire):
@@ -94,27 +97,38 @@ async def _generate(
 
     refs = [JobRef(index=position, job_id=job.job_id, status="queued") for position, job in enumerate(outcome.jobs)]
     next_step: NextStep | None = NextStep(tool="jobs_wait", after_seconds=2, hint="Pass these job_ids to jobs_wait.")
-    if wait_seconds > 0:
-        waited = await platform.jobs.wait(
-            [r.job_id for r in refs], timeout=float(wait_seconds), principal=platform.principal
-        )
-        by_id = {view.job_id: view for view in waited.jobs}
-        for ref in refs:
-            view = by_id[ref.job_id]
-            ref.status = view.status
-            ref.results = [r.to_dict() for r in view.results] or None
-            ref.error = view.error
-        next_step = (
-            None if waited.all_terminal else NextStep(tool="jobs_wait", after_seconds=waited.poll_after_seconds or 2)
-        )
+    if wait_seconds > 0 or outcome.replayed:
+        # The jobs are committed and paid for: from here on nothing may turn the answer into an
+        # error, or the caller would lose the job ids. A replay reads the jobs' current state.
+        try:
+            waited = await platform.jobs.wait(
+                [r.job_id for r in refs], timeout=float(max(wait_seconds, 0)), principal=platform.principal
+            )
+        except Exception:
+            logger.exception("%s: waiting after submit failed; returning the job ids", tool)
+        else:
+            by_id = {view.job_id: view for view in waited.jobs}
+            for ref in refs:
+                view = by_id[ref.job_id]
+                ref.status = view.status
+                ref.results = [r.to_dict() for r in view.results] or None
+                ref.error = view.error
+            next_step = (
+                None
+                if waited.all_terminal
+                else NextStep(tool="jobs_wait", after_seconds=waited.poll_after_seconds or 2)
+            )
     return ok(
         GenerateResult(
             status="submitted",
             jobs=refs,
-            credits=Credits(charged=outcome.credits_total, balance=outcome.balance),
+            credits=Credits(charged=0 if outcome.replayed else outcome.credits_total, balance=outcome.balance),
             adjustments=adjustments or None,
             replayed=True if outcome.replayed else None,
             next=next_step,
+            message="Replay of an earlier identical call: these are its jobs; nothing new was charged."
+            if outcome.replayed
+            else None,
         )
     )
 
@@ -338,10 +352,12 @@ async def generate_batch(
             status="submitted",
             items=_batch_items(outcome, errors, ok_status="submitted"),
             job_ids=job_ids,
-            credits=Credits(charged=outcome.credits_total, balance=outcome.balance),
+            credits=Credits(charged=0 if outcome.replayed else outcome.credits_total, balance=outcome.balance),
             replayed=True if outcome.replayed else None,
             next=NextStep(tool="jobs_wait", after_seconds=2, hint="Pass job_ids to jobs_wait, at most 12 per call."),
-            message=f"{rejected} request(s) were rejected and not charged; see their `error`." if rejected else None,
+            message="Replay of an earlier identical call: these are its jobs; nothing new was charged."
+            if outcome.replayed
+            else (f"{rejected} request(s) were rejected and not charged; see their `error`." if rejected else None),
         )
     )
 

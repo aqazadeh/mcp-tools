@@ -101,3 +101,16 @@ def test_pricing_units_and_multipliers() -> None:
     video = quote(VIDEO, normalize_request(VIDEO, {"prompt": "x", "duration": 5, "resolution": "720p"}))
     assert video.per_job == 20 * 5 * 2 and video.breakdown()["unit"] == "per_second"
     assert quote(AUDIO, normalize_request(AUDIO, {"prompt": "x"})).per_job == 6  # 3 s default x 2 credits
+
+
+@pytest.mark.parametrize("count", ["--5", "\u00b2", "9" * 5000, "1e3", " "])
+def test_odd_count_strings_are_errors_not_crashes(count: str) -> None:
+    model = load_catalog(()).get("mock_image")
+    with pytest.raises(ApiError):
+        normalize_request(model, {"model": "mock_image", "prompt": "p", "count": count})
+
+
+def test_adjustments_do_not_echo_oversized_values() -> None:
+    model = load_catalog(()).get("mock_image")
+    request = normalize_request(model, {"model": "mock_image", "prompt": "p", "seed": "0" * 50_000 + "7"})
+    assert request.params["seed"] == 7 and len(str(request.adjustments)) < 500

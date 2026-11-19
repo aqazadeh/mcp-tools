@@ -43,6 +43,24 @@ class IdempotencyStore:
         self._clock = clock
         self._window_ms = window_ms
 
+    async def lookup(
+        self, conn: AsyncConnection, workspace_id: str, tool: str, key: str
+    ) -> tuple[str, dict[str, Any]] | None:
+        """The digest and response of a finished earlier call with this key, if still replayable."""
+        row = (
+            await conn.execute(
+                select(idempotency_keys.c.request_hash, idempotency_keys.c.response_json).where(
+                    idempotency_keys.c.workspace_id == workspace_id,
+                    idempotency_keys.c.tool == tool,
+                    idempotency_keys.c.key == key,
+                    idempotency_keys.c.expires_at > self._clock.now_ms(),
+                )
+            )
+        ).first()
+        if row is None or not row[1]:
+            return None
+        return row[0], json.loads(row[1])
+
     async def begin(
         self, conn: AsyncConnection, workspace_id: str, tool: str, key: str, digest: str
     ) -> dict[str, Any] | None:

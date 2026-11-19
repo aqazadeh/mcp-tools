@@ -31,6 +31,15 @@ class Quote:
         }
 
 
+def _table_key(value: object) -> str:
+    """How a parameter value is spelled in a multiplier table: true/false, and 2 for 2.0."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
 def quote(model: ModelSpec, request: NormalizedRequest) -> Quote:
     rule = model.pricing
     if rule.unit == "per_second":
@@ -43,6 +52,6 @@ def quote(model: ModelSpec, request: NormalizedRequest) -> Quote:
     for name, table in rule.multipliers.items():
         value = request.aspect_ratio if name == "aspect_ratio" else request.params.get(name)
         if value is not None:
-            multiplier *= table.get(str(value), 1.0)
+            multiplier *= table.get(_table_key(value), 1.0)
     per_job = max(rule.minimum, math.ceil(rule.credits * units * multiplier))
     return Quote(per_job=per_job, count=request.count, unit=rule.unit, units=units, multiplier=multiplier)

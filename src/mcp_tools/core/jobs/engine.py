@@ -21,11 +21,12 @@ import logging
 import os
 import secrets
 import socket
+import sys
 from dataclasses import dataclass
 from typing import Any
 
 import anyio
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from mcp_tools.core.billing.ledger import Ledger, Ref
@@ -55,7 +56,11 @@ QUEUED_TTL_MS = 10 * 60 * 1000
 POLL_BACKOFF_MS = (1_000, 2_000, 3_000, 5_000)
 POLL_MIN_MS = 100
 POLL_MAX_MS = 10_000
-MAX_ATTEMPTS = 400  # safety net against a job that is claimed forever without progress
+MAX_DOWNLOAD_RETRIES = 5
+POLL_TIMEOUT_S = 60.0
+SUBMIT_TIMEOUT_S = 120.0  # asynchronous submit: the provider only has to accept the request
+DOWNLOAD_TIMEOUT_S = 600.0
+_DOWNLOAD_RETRIES_KEY = "_download_retries"
 
 
 def make_owner_id(clock: Clock) -> str:
@@ -63,18 +68,35 @@ def make_owner_id(clock: Clock) -> str:
     return f"{socket.gethostname()}|{os.getpid()}|{clock.now_ms()}-{secrets.token_hex(4)}"
 
 
+def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":  # os.kill(pid, 0) is not an existence probe on Windows
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def _owner_alive_here(owner: str) -> bool:
     """True if the lease owner is a live process on this host (so its lease may just be late)."""
     try:
         host, pid, _started = owner.split("|")
-        if host != socket.gethostname():
-            return False
-        os.kill(int(pid), 0)
-    except (ValueError, ProcessLookupError):
+        return host == socket.gethostname() and _pid_alive(int(pid))
+    except (ValueError, OSError, AttributeError):
         return False
-    except PermissionError:
-        return True
-    return True
 
 
 @dataclass(frozen=True)
@@ -107,6 +129,22 @@ class Engine:
         self._on_change = on_change or (lambda _job_id: None)
         self._lease_ttl_ms = lease_ttl_ms
         self._grace_ms = min(SAME_HOST_GRACE_MS, lease_ttl_ms)
+        self._held: set[str] = set()  # jobs this process is working on right now
+        self._expired_seen: dict[tuple[str, str, int], int] = {}
+
+    def _may_take_over(self, job_id: str, owner: str, expires: int, now: int) -> bool:
+        """May an expired lease of another owner be taken?
+
+        A live owner on this host gets a grace period to renew, counted from the moment this
+        process first saw the lease expired. Counting from the stored expiry would not work:
+        after a laptop sleep the whole grace has already "passed" at the first look.
+        """
+        if not _owner_alive_here(owner):
+            return True
+        if len(self._expired_seen) > 2000:
+            self._expired_seen.clear()
+        first = self._expired_seen.setdefault((job_id, owner, expires), now)
+        return now - first >= self._grace_ms
 
     # -- scheduling queries ----------------------------------------------------------------
     def _free_lease(self, now: int) -> Any:
@@ -142,24 +180,33 @@ class Engine:
         usable = self._providers.usable()
         if not usable:
             return None
-        query = (
-            select(jobs.c.next_poll_at)
-            .where(jobs.c.status.in_(ACTIVE_JOB_STATUSES), jobs.c.provider.in_(usable))
-            .order_by(jobs.c.next_poll_at)
-            .limit(1)
+        now = self._clock.now_ms()
+        active = (jobs.c.status.in_(ACTIVE_JOB_STATUSES), jobs.c.provider.in_(usable))
+        # A job under a live lease is somebody's work in progress: nothing to do before the lease ends.
+        free = select(func.min(jobs.c.next_poll_at)).where(*active, self._free_lease(now))
+        leased = select(func.min(jobs.c.lease_expires_at)).where(
+            *active, jobs.c.lease_owner.is_not(None), jobs.c.lease_expires_at > now
         )
         async with self._store.read_tx() as conn:
-            row = (await conn.execute(query)).first()
-        return None if row is None else max(0, row[0] - self._clock.now_ms())
+            times = [(await conn.execute(query)).scalar() for query in (free, leased)]
+        known = [t for t in times if t is not None]
+        return max(0, min(known) - now) if known else None
 
     async def heartbeat(self) -> None:
-        """One statement renews every lease this process holds."""
+        """One statement renews the leases of the jobs this process is working on right now.
+
+        Only those: a lease left behind by a step that failed in an unexpected way must be
+        allowed to expire, or the job would be stuck for as long as this process lives.
+        """
+        held = sorted(self._held)
+        if not held:
+            return
         now = self._clock.now_ms()
 
         async def unit(conn: AsyncConnection) -> None:
             await conn.execute(
                 update(jobs)
-                .where(jobs.c.lease_owner == self.owner, jobs.c.status.in_(ACTIVE_JOB_STATUSES))
+                .where(jobs.c.lease_owner == self.owner, jobs.c.id.in_(held), jobs.c.status.in_(ACTIVE_JOB_STATUSES))
                 .values(lease_expires_at=now + self._lease_ttl_ms)
             )
 
@@ -179,52 +226,70 @@ class Engine:
 
     # -- reaping (needs no provider) ---------------------------------------------------------
     async def reap(self) -> list[str]:
-        """Fail jobs nobody can finish: orphaned `submitting` jobs and jobs queued for too long."""
+        """End jobs nobody can finish. Needs no provider, so every process can do it.
+
+        - `submitting` with a dead owner: failed as interrupted (never resubmitted).
+        - `queued` for too long: failed as expired.
+        - `running`, unleased, and well past its deadline or an unserved cancel request: no
+          process that can reach its provider is around, so it is closed here and refunded.
+        """
         now = self._clock.now_ms()
+        margin = 2 * self._lease_ttl_ms
+        candidates = or_(
+            and_(jobs.c.status == "submitting", jobs.c.lease_expires_at <= now),
+            and_(jobs.c.status == "queued", jobs.c.created_at <= now - QUEUED_TTL_MS, self._free_lease(now)),
+            and_(
+                jobs.c.status == "running",
+                self._free_lease(now),
+                or_(jobs.c.deadline_at <= now - margin, jobs.c.cancel_requested_at <= now - margin),
+            ),
+        )
+        columns = (
+            jobs.c.id,
+            jobs.c.workspace_id,
+            jobs.c.status,
+            jobs.c.lease_owner,
+            jobs.c.lease_expires_at,
+            jobs.c.cancel_requested_at,
+        )
+        async with self._store.read_tx() as conn:  # the common case is "nothing to do": avoid a write lock
+            if (await conn.execute(select(jobs.c.id).where(candidates).limit(1))).first() is None:
+                return []
 
         async def unit(conn: AsyncConnection) -> list[tuple[str, str]]:
-            rows = (
-                (
-                    await conn.execute(
-                        select(
-                            jobs.c.id,
-                            jobs.c.workspace_id,
-                            jobs.c.status,
-                            jobs.c.lease_owner,
-                            jobs.c.lease_expires_at,
-                        )
-                        .where(
-                            or_(
-                                and_(jobs.c.status == "submitting", jobs.c.lease_expires_at <= now),
-                                and_(
-                                    jobs.c.status == "queued",
-                                    jobs.c.created_at <= now - QUEUED_TTL_MS,
-                                    self._free_lease(now),
-                                ),
-                            )
-                        )
-                        .limit(100)
-                    )
-                )
-                .mappings()
-                .all()
-            )
+            rows = (await conn.execute(select(*columns).where(candidates).limit(100))).mappings().all()
             reaped: list[tuple[str, str]] = []
             for row in rows:
                 owner = row["lease_owner"]
+                status = "failed"
                 if row["status"] == "submitting":
-                    if owner == self.owner:
+                    if row["id"] in self._held:
                         continue  # our own call is still in flight; the heartbeat is merely late
-                    if owner and _owner_alive_here(owner) and now < (row["lease_expires_at"] or 0) + self._grace_ms:
+                    if (
+                        owner
+                        and owner != self.owner
+                        and not self._may_take_over(row["id"], owner, row["lease_expires_at"] or 0, now)
+                    ):
                         continue
                     code, message = "interrupted", "the server stopped while the request was being submitted"
-                else:
+                elif row["status"] == "queued":
                     code, message = "expired", "the job waited in the queue for too long and was not started"
+                else:
+                    if (
+                        owner
+                        and owner != self.owner
+                        and not self._may_take_over(row["id"], owner, row["lease_expires_at"] or 0, now)
+                    ):
+                        continue
+                    if row["cancel_requested_at"] is not None:
+                        status, code, message = "canceled", "canceled", "canceled on request"
+                    else:
+                        code, message = "timeout", "the provider did not finish before the deadline"
                 changed = await conn.execute(
                     update(jobs)
                     .where(jobs.c.id == row["id"], jobs.c.status == row["status"])
                     .values(
-                        status="failed",
+                        status=status,
                         error_code=code,
                         error_message=message,
                         finished_at=now,
@@ -261,7 +326,7 @@ class Engine:
             if owner is not None:
                 if expires is not None and expires > now:
                     return None
-                if owner != self.owner and _owner_alive_here(owner) and now < (expires or 0) + self._grace_ms:
+                if owner != self.owner and not self._may_take_over(job_id, owner, expires or 0, now):
                     return None
             prior = row["status"]
             due = (
@@ -286,7 +351,10 @@ class Engine:
             )
             return _Claim(row=dict(row), prior=prior) if changed.rowcount == 1 else None
 
-        return await self._store.write(unit)
+        claim = await self._store.write(unit)
+        if claim is not None:
+            self._held.add(job_id)
+        return claim
 
     # -- transitions -------------------------------------------------------------------------
     async def _transition(
@@ -346,7 +414,14 @@ class Engine:
             return int(min(max(retry_after * 1000, POLL_MIN_MS), POLL_MAX_MS))
         return POLL_BACKOFF_MS[min(max(attempts - 1, 0), len(POLL_BACKOFF_MS) - 1)]
 
-    async def _reschedule(self, row: dict[str, Any], *, progress: float | None, retry_after: float | None) -> None:
+    async def _reschedule(
+        self,
+        row: dict[str, Any],
+        *,
+        progress: float | None,
+        retry_after: float | None,
+        state: dict[str, Any] | None = None,
+    ) -> None:
         values: dict[str, Any] = {
             "next_poll_at": self._clock.now_ms() + self._poll_delay_ms(row["attempts"], retry_after),
             "lease_owner": None,
@@ -354,20 +429,45 @@ class Engine:
         }
         if progress is not None:
             values["progress"] = progress
+        if state is not None:
+            values["remote_state_json"] = state
         await self._transition(row, expect=("running",), values=values)
 
     # -- the step ----------------------------------------------------------------------------
-    async def advance(self, job_id: str) -> None:
-        """Do one step for a job: submit it, poll it, or finish it. Runner task group only."""
+    async def advance(self, job_id: str) -> bool:
+        """Do one step for a job: submit it, poll it, or finish it. Runner task group only.
+
+        Returns False when the job could not be claimed (nothing was done).
+        """
         claim = await self._claim(job_id)
         if claim is None:
-            return
+            return False
+        row = claim.row
+        try:
+            await self._step(claim)
+        except BaseException as exc:
+            # Whatever went wrong, the lease must not be left behind with the job half-way.
+            with anyio.CancelScope(shield=True):
+                try:
+                    if claim.prior == "queued":
+                        await self._finish(
+                            row, "failed", "interrupted", "the server stopped or failed while starting the job"
+                        )
+                    else:
+                        await self._reschedule(row, progress=None, retry_after=None)
+                except Exception:
+                    logger.exception("job %s: could not release the lease after a failed step", job_id)
+            if not isinstance(exc, Exception):
+                raise
+            logger.exception("job %s: step failed unexpectedly", job_id)
+        finally:
+            self._held.discard(job_id)
+        return True
+
+    async def _step(self, claim: _Claim) -> None:
         row, now = claim.row, self._clock.now_ms()
         provider = self._providers.peek(row["provider"])
         assert provider is not None
-        if row["attempts"] >= MAX_ATTEMPTS:
-            await self._finish(row, "failed", "stuck", "the job made no progress and was stopped")
-            return
 
         if claim.prior == "queued":
             if row["cancel_requested_at"] is not None:
@@ -379,23 +479,32 @@ class Engine:
             return
 
         # running
-        if row["deadline_at"] <= now:
-            await self._cancel_remote(row, provider)
-            await self._finish(row, "failed", "timeout", "the provider did not finish before the deadline")
-            return
         if row["cancel_requested_at"] is not None:
             await self._cancel_remote(row, provider)
             await self._finish(row, "canceled", "canceled", "canceled on request")
             return
+        overdue = row["deadline_at"] <= now
         try:
-            result = await provider.poll(row["remote_id"] or "", row["remote_state_json"] or {})
-        except ProviderError as exc:
-            if exc.retryable:
+            with anyio.fail_after(POLL_TIMEOUT_S):
+                result = await provider.poll(row["remote_id"] or "", row["remote_state_json"] or {})
+        except (ProviderError, TimeoutError) as exc:
+            if overdue:
+                await self._time_out(row, provider)
+            elif isinstance(exc, TimeoutError) or exc.retryable:
                 await self._reschedule(row, progress=None, retry_after=None)
             else:
                 await self._finish(row, "failed", exc.code, exc.message)
             return
+        # Past the deadline the job gets this one last look: a result the provider already
+        # produced (say, while the laptop slept) is kept rather than thrown away.
+        if overdue and result.state == "running":
+            await self._time_out(row, provider)
+            return
         await self._apply(row, result, provider)
+
+    async def _time_out(self, row: dict[str, Any], provider: Provider) -> None:
+        await self._cancel_remote(row, provider)
+        await self._finish(row, "failed", "timeout", "the provider did not finish before the deadline")
 
     async def _cancel_remote(self, row: dict[str, Any], provider: Provider) -> None:
         if not row["remote_id"]:
@@ -451,10 +560,15 @@ class Engine:
             # a shutdown cannot fall between "the provider accepted" and "we remember the handle".
             # A synchronous call can take a minute, so it stays cancellable (and is failed below).
             with anyio.CancelScope(shield=asynchronous):
-                submitted = await provider.submit(request)
+                left = max(1.0, (row["deadline_at"] - self._clock.now_ms()) / 1000)
+                try:
+                    with anyio.fail_after(min(SUBMIT_TIMEOUT_S, left) if asynchronous else left):
+                        submitted = await provider.submit(request)
+                except TimeoutError:
+                    raise ProviderError("timeout", "the provider did not answer in time", ambiguous=True) from None
                 if submitted.result is None:
                     now = self._clock.now_ms()
-                    await self._transition(
+                    saved = await self._transition(
                         row,
                         expect=("submitting",),
                         values={
@@ -467,6 +581,11 @@ class Engine:
                             "lease_expires_at": None,
                         },
                     )
+                    if not saved and submitted.remote_id:
+                        # The lease was lost while the provider accepted the job: nobody will poll it.
+                        await self._cancel_remote(
+                            {**row, "remote_id": submitted.remote_id, "remote_state_json": submitted.state}, provider
+                        )
                     return
         except ProviderError as exc:
             if exc.ambiguous:
@@ -517,14 +636,20 @@ class Engine:
             return
         if len(result.outputs) > 1:
             logger.info("job %s: provider returned %d outputs, keeping the first", row["id"], len(result.outputs))
+        state = dict(row["remote_state_json"] or {})
+        retries = int(state.get(_DOWNLOAD_RETRIES_KEY) or 0)
         try:
-            async with provider.open_output(next(iter(result.outputs))) as chunks:
-                blob = await self._media.store_stream(chunks, accept=frozenset({row["output_type"]}))
-        except ProviderError as exc:
-            if exc.retryable and not synchronous and row["attempts"] < 6:
-                await self._reschedule(row, progress=None, retry_after=2.0)
+            with anyio.fail_after(DOWNLOAD_TIMEOUT_S):
+                async with provider.open_output(next(iter(result.outputs))) as chunks:
+                    blob = await self._media.store_stream(chunks, accept=frozenset({row["output_type"]}))
+        except (ProviderError, TimeoutError) as exc:
+            retryable = isinstance(exc, TimeoutError) or exc.retryable
+            if retryable and not synchronous and retries < MAX_DOWNLOAD_RETRIES:
+                state[_DOWNLOAD_RETRIES_KEY] = retries + 1
+                await self._reschedule(row, progress=None, retry_after=2.0, state=state)
             else:
-                await self._finish(row, "failed", "output_unavailable", exc.message)
+                message = "the output could not be downloaded in time" if isinstance(exc, TimeoutError) else exc.message
+                await self._finish(row, "failed", "output_unavailable", message)
             return
         except ApiError as exc:
             await self._finish(row, "failed", "invalid_output", exc.message)
@@ -537,17 +662,20 @@ class Engine:
                 conn, blob, principal=principal, source="job_output", job_id=row["id"], output_index=0
             )
 
-        completed = await self._transition(
-            row,
-            expect=("submitting", "running"),
-            values={
-                "status": "completed",
-                "progress": 1.0,
-                "finished_at": self._clock.now_ms(),
-                "lease_owner": None,
-                "lease_expires_at": None,
-            },
-            extra=register,
-        )
-        if not completed:
-            await self._media.discard_key(blob.key)
+        completed = False
+        try:
+            completed = await self._transition(
+                row,
+                expect=("submitting", "running"),
+                values={
+                    "status": "completed",
+                    "progress": 1.0,
+                    "finished_at": self._clock.now_ms(),
+                    "lease_owner": None,
+                    "lease_expires_at": None,
+                },
+                extra=register,
+            )
+        finally:
+            if not completed:
+                await self._media.discard_key(blob.key)

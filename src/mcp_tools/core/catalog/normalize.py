@@ -7,6 +7,7 @@ would spend credits on the wrong output, so nothing is dropped silently.
 """
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,8 +58,18 @@ def _invalid(message: str, *, hint: str, allowed: list[Any] | None = None, model
     )
 
 
+def _brief(value: Any) -> Any:
+    """Adjustments are echoed to the caller and stored: keep an oversized original from bloating them."""
+    if isinstance(value, str) and len(value) > 120:
+        return value[:117] + "..."
+    if isinstance(value, (list, dict)):
+        text = repr(value)
+        return text if len(text) <= 120 else text[:117] + "..."
+    return value
+
+
 def _adjust(out: NormalizedRequest, name: str, before: Any, after: Any, reason: str) -> None:
-    out.adjustments.append({"field": name, "from": before, "to": after, "reason": reason})
+    out.adjustments.append({"field": name, "from": _brief(before), "to": _brief(after), "reason": reason})
 
 
 def _ratio(text: str) -> float | None:
@@ -264,7 +275,7 @@ def normalize_request(model: ModelSpec, raw: dict[str, Any]) -> NormalizedReques
 
     # count
     count = raw.get("count", 1)
-    if isinstance(count, str) and count.strip().lstrip("-").isdigit():
+    if isinstance(count, str) and re.fullmatch(r"-?[0-9]{1,6}", count.strip(), flags=re.ASCII):
         count = int(count)
     if isinstance(count, bool) or not isinstance(count, int):
         raise _invalid("count must be a whole number", hint=f"Use 1 to {MAX_COUNT}.", model=model)

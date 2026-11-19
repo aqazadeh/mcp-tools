@@ -19,7 +19,7 @@ from mcp_tools.core.catalog.normalize import NormalizedRequest, normalize_reques
 from mcp_tools.core.catalog.pricing import Quote, quote
 from mcp_tools.core.catalog.spec import ModelSpec
 from mcp_tools.core.clock import Clock
-from mcp_tools.core.errors import BUDGET_EXCEEDED, INVALID_PARAMS, NOT_FOUND, ApiError
+from mcp_tools.core.errors import BUDGET_EXCEEDED, IDEMPOTENCY_KEY_REUSED, INVALID_PARAMS, NOT_FOUND, ApiError
 from mcp_tools.core.ids import is_id, new_id
 from mcp_tools.core.jobs.runner import ChangeSignal, Runner
 from mcp_tools.core.jobs.views import JobView, MediaView, job_view, media_view
@@ -286,6 +286,15 @@ class JobService:
         key = check_key(idempotency_key) if idempotency_key else None
         if max_credits is not None and max_credits < 0:
             raise ApiError(INVALID_PARAMS, "max_credits must not be negative", hint="Omit it or pass a cap in credits.")
+        if key is not None:
+            # A retry of a call that already went through must be answered with that call's result,
+            # whatever the budget, the balance or the provider's availability look like now.
+            async with self._store.read_tx() as conn:
+                stored = await self._idempotency.lookup(conn, principal.workspace_id, tool, key)
+            if stored is not None:
+                return await self._replay(
+                    stored, requests, principal=principal, tool=tool, output_type=output_type, task=task, strict=strict
+                )
         prepared, errors = await self._prepare_all(
             requests, principal=principal, output_type=output_type, task=task, strict=strict
         )
@@ -325,7 +334,7 @@ class JobService:
                 limit=self._auto_approve,
             )
 
-        digest = request_hash({"tool": tool, "items": [{"index": p.index, **p.canonical()} for p in prepared]})
+        digest = self._digest(tool, prepared)
         now = self._clock.now_ms()
 
         async def unit(conn: AsyncConnection) -> tuple[bool, dict[str, Any]]:
@@ -379,15 +388,66 @@ class JobService:
                 self._runner.poke(job["job_id"])
 
         replayed, response = await self._store.write(unit, after_commit=wake)
+        balance = response["balance"]
+        if replayed:  # lost a race with an identical call: report the balance as it is now
+            async with self._store.read_tx() as conn:
+                balance = (await self._ledger.balance(conn, principal.workspace_id)).balance
         return Outcome(
             status="submitted",
             items=items,
             errors=errors,
             jobs=[CreatedJob(index=j["index"], job_id=j["job_id"]) for j in response["jobs"]],
             credits_total=response["credits_total"],
-            balance=response["balance"],
+            balance=balance,
             group_id=response["group_id"],
             replayed=replayed,
+        )
+
+    @staticmethod
+    def _digest(tool: str, prepared: list[_Prepared]) -> str:
+        return request_hash({"tool": tool, "items": [{"index": p.index, **p.canonical()} for p in prepared]})
+
+    async def _replay(
+        self,
+        stored: tuple[str, dict[str, Any]],
+        requests: list[GenerationRequest],
+        *,
+        principal: Principal,
+        tool: str,
+        output_type: str | None,
+        task: str,
+        strict: bool,
+    ) -> Outcome:
+        stored_digest, response = stored
+        items: list[ItemQuote] = []
+        errors: dict[int, ApiError] = {}
+        try:
+            prepared, errors = await self._prepare_all(
+                requests, principal=principal, output_type=output_type, task=task, strict=strict
+            )
+        except ApiError:
+            pass  # the request cannot be normalised any more (say, the provider is gone): replay on the key
+        else:
+            if self._digest(tool, prepared) != stored_digest:
+                raise ApiError(
+                    IDEMPOTENCY_KEY_REUSED,
+                    "this idempotency_key was already used with a different request",
+                    hint="Use a new key for a new request; reuse a key only to retry the identical request.",
+                )
+            items = self._items(prepared)
+        for job in response["jobs"]:
+            self._runner.poke(job["job_id"])
+        async with self._store.read_tx() as conn:
+            balance = (await self._ledger.balance(conn, principal.workspace_id)).balance
+        return Outcome(
+            status="submitted",
+            items=items,
+            errors=errors,
+            jobs=[CreatedJob(index=j["index"], job_id=j["job_id"]) for j in response["jobs"]],
+            credits_total=response["credits_total"],
+            balance=balance,
+            group_id=response["group_id"],
+            replayed=True,
         )
 
     # -- reading ---------------------------------------------------------------------------

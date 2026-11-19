@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 IDLE_TICK_SECONDS = 5.0
 MIN_TICK_SECONDS = 0.05
+UNCLAIMED_BACKOFF_SECONDS = 1.0  # a job another live process holds: do not hammer it
 
 
 class ChangeSignal:
@@ -47,6 +48,7 @@ class Runner:
         self._wake = anyio.Event()
         self._poked: set[str] = set()
         self._inflight: set[str] = set()
+        self._skip_until: dict[str, float] = {}
         self.running = False
 
     def poke(self, job_id: str | None = None) -> None:
@@ -79,27 +81,39 @@ class Runner:
                     logger.debug("could not release leases on shutdown", exc_info=True)
 
     async def _tick(self, tg: anyio.abc.TaskGroup) -> float:
-        await self._engine.reap()
+        try:
+            await self._engine.reap()
+        except Exception:  # a reaper problem must not stop due jobs from being processed
+            logger.exception("reaping failed; continuing")
+        now = anyio.current_time()
+        self._skip_until = {job: until for job, until in self._skip_until.items() if until > now}
         poked, self._poked = self._poked, set()
         due = await self._engine.due_jobs()
-        for job_id in [*poked, *due]:
-            if job_id not in self._inflight:
+        started = 0
+        for job_id in dict.fromkeys([*poked, *due]):
+            if job_id not in self._inflight and (job_id in poked or job_id not in self._skip_until):
                 self._inflight.add(job_id)
-                tg.start_soon(self._advance, job_id)
+                tg.start_soon(self._advance, job_id, job_id in due)
+                started += 1
         next_due = await self._engine.next_due_in_ms()
         if next_due is None:
             return IDLE_TICK_SECONDS
-        return min(IDLE_TICK_SECONDS, max(MIN_TICK_SECONDS, next_due / 1000))
+        floor = MIN_TICK_SECONDS if started or next_due > 0 else UNCLAIMED_BACKOFF_SECONDS / 2
+        return min(IDLE_TICK_SECONDS, max(floor, next_due / 1000))
 
-    async def _advance(self, job_id: str) -> None:
+    async def _advance(self, job_id: str, was_due: bool) -> None:
+        worked = False
         try:
             async with self._limiter:
-                await self._engine.advance(job_id)
+                worked = await self._engine.advance(job_id)
         except Exception:
             logger.exception("advancing job %s failed", job_id)
         finally:
             self._inflight.discard(job_id)
-            self._wake.set()  # re-evaluate what is due next
+            if worked:
+                self._wake.set()  # re-evaluate what is due next
+            elif was_due:  # due but not claimable: a live process on this host still holds it
+                self._skip_until[job_id] = anyio.current_time() + UNCLAIMED_BACKOFF_SECONDS
 
     async def _heartbeat_loop(self) -> None:
         while True:

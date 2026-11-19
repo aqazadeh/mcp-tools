@@ -19,6 +19,7 @@ from mcp_tools.core.jobs.service import GenerationRequest
 from mcp_tools.core.platform import Platform
 from mcp_tools.db.schema import jobs, ledger_entries, media
 from mcp_tools.providers.base import OutputRef, PollResult, ProviderError
+from tests.helpers.media_samples import png_bytes
 from tests.helpers.providers import CATALOG_DIR, FAILED, MODERATED, RUNNING, TRANSIENT, ScriptedProvider
 
 pytestmark = pytest.mark.anyio
@@ -236,9 +237,132 @@ async def test_deadline_cancels_remotely_and_fails(rig: Rig) -> None:
     job = await rig.create()
     await rig.step(job)
     rig.clock.advance(61)
+    rig.provider.poll_script = [RUNNING]
     await rig.step(job)
     assert (await rig.row(job))["error_code"] == "timeout"
     assert rig.provider.cancels == [f"remote-{job}"] and await rig.balance() == 1_000
+
+
+async def test_a_result_that_arrived_while_the_machine_slept_is_kept(rig: Rig) -> None:
+    job = await rig.create()
+    await rig.step(job)
+    rig.clock.advance(3600)  # far past the 60 s deadline; the provider finished meanwhile
+    await rig.step(job)
+    assert await rig.status(job) == "completed" and rig.provider.cancels == []
+    assert await rig.media_count(job) == 1 and await rig.balance() == 900
+
+
+# -- regressions from the engine review -----------------------------------------------------------
+async def test_an_unexpected_error_in_a_step_does_not_strand_the_job(rig: Rig) -> None:
+    job = await rig.create()
+    await rig.step(job)
+    rig.clock.advance(0.2)
+    rig.provider.poll_script = [RuntimeError("bug in an adapter")]
+    await rig.step(job)  # swallowed and logged; the lease is released and the poll rescheduled
+    row = await rig.row(job)
+    assert (row["status"], row["lease_owner"]) == ("running", None)
+    await rig.platform.engine.heartbeat()
+    rig.clock.advance(6)
+    await rig.step(job)
+    assert await rig.status(job) == "completed"
+
+
+async def test_an_unexpected_error_while_starting_fails_and_refunds(rig: Rig) -> None:
+    job = await rig.create()
+    rig.provider.submit_error = RuntimeError("bug in an adapter")
+    await rig.step(job)
+    row = await rig.row(job)
+    assert (row["status"], row["error_code"], row["lease_owner"]) == ("failed", "interrupted", None)
+    assert len(rig.provider.submits) == 1 and await rig.balance() == 1_000
+
+
+async def test_the_heartbeat_renews_only_jobs_in_flight(rig: Rig) -> None:
+    job = await rig.create()
+    await rig.step(job)
+    owner = rig.platform.engine.owner
+    await rig.set(job, lease_owner=owner, lease_expires_at=rig.clock.now_ms() + 1_000)  # a lease left behind
+    await rig.platform.engine.heartbeat()
+    assert (await rig.row(job))["lease_expires_at"] == rig.clock.now_ms() + 1_000
+    rig.clock.advance(2)
+    await rig.step(job)  # expired, so the job is picked up again
+    assert await rig.status(job) == "completed"
+
+
+async def test_grace_for_a_live_owner_starts_when_the_expiry_is_first_seen(rig: Rig, other: Rig) -> None:
+    job = await rig.create()
+    owner = rig.platform.engine.owner  # same host, live pid
+    await rig.set(job, status="submitting", lease_owner=owner, lease_expires_at=rig.clock.now_ms() + TTL_MS)
+    rig.clock.advance(600)  # a long sleep: lease and "grace from expiry" are both long over
+    assert await other.platform.engine.reap() == []  # first look after the resume: wait
+    rig.clock.advance(TTL_MS / 1000 - 1)
+    assert await other.platform.engine.reap() == []
+    rig.clock.advance(2)
+    assert await other.platform.engine.reap() == [job]  # still not renewed: now it is orphaned
+    assert (await rig.row(job))["error_code"] == "interrupted" and await rig.balance() == 1_000
+
+
+async def test_long_jobs_are_not_killed_by_a_claim_counter(rig: Rig) -> None:
+    job = await rig.create()
+    await rig.set(job, deadline_at=rig.clock.now_ms() + 3_600_000)
+    await rig.step(job)
+    rig.provider.default_poll = RUNNING
+    for _ in range(450):
+        rig.clock.advance(0.2)
+        await rig.step(job)
+    assert await rig.status(job) == "running" and len(rig.provider.polls) == 450
+    rig.provider.default_poll = PollResult("succeeded", progress=1.0, outputs=(OutputRef(state={}),))
+    rig.provider.output = TRANSIENT  # after many polls a download hiccup still gets its retries
+    rig.clock.advance(0.2)
+    await rig.step(job)
+    assert await rig.status(job) == "running"
+    rig.provider.output = png_bytes(16, 16)
+    rig.clock.advance(3)
+    await rig.step(job)
+    assert await rig.status(job) == "completed"
+
+
+async def test_running_jobs_nobody_can_reach_are_closed_and_refunded(rig: Rig, other: Rig) -> None:
+    overdue, unwanted = await rig.create(), await rig.create()
+    await rig.step(overdue)
+    await rig.step(unwanted)
+    other.provider.available = False  # this process has no access to the provider
+    await other.platform.jobs.cancel(unwanted, principal=other.platform.principal)
+    assert await other.platform.engine.reap() == []  # give a process that can reach the provider time
+    rig.clock.advance(2 * TTL_MS / 1000 + 1)
+    assert await other.platform.engine.reap() == [unwanted]
+    assert (await rig.row(unwanted))["status"] == "canceled"
+    rig.clock.advance(60)
+    assert await other.platform.engine.reap() == [overdue]
+    assert (await rig.row(overdue))["error_code"] == "timeout" and await rig.balance() == 1_000
+
+
+async def test_a_retry_with_the_same_key_replays_even_when_the_request_would_now_be_refused(rig: Rig) -> None:
+    async def call(**extra: Any) -> Any:
+        return await rig.platform.jobs.create(
+            [GenerationRequest(0, {"model": "fake_image", "prompt": "p"})],
+            principal=rig.platform.principal,
+            tool="generate_image",
+            output_type=None,
+            idempotency_key="retry-1",
+            **extra,
+        )
+
+    first = await call(max_credits=100)
+    rig.platform.jobs._auto_approve = 10  # the same call without a cap would now need approval
+    replay = await call()
+    assert replay.status == "submitted" and replay.replayed and replay.jobs == first.jobs
+    rig.provider.available = False  # ... or would be refused outright
+    assert (await call()).jobs == first.jobs
+    rig.provider.available = True
+    with pytest.raises(ApiError) as reused:
+        await rig.platform.jobs.create(
+            [GenerationRequest(0, {"model": "fake_image", "prompt": "different"})],
+            principal=rig.platform.principal,
+            tool="generate_image",
+            output_type=None,
+            idempotency_key="retry-1",
+        )
+    assert reused.value.code == "idempotency_key_reused" and await rig.balance() == 900
 
 
 async def test_a_job_queued_for_too_long_is_not_started(rig: Rig) -> None:
@@ -361,6 +485,7 @@ async def test_heartbeat_renews_and_shutdown_releases_running_leases(rig: Rig) -
     owner = rig.platform.engine.owner
     await rig.set(job, lease_owner=owner, lease_expires_at=rig.clock.now_ms() + 5)
     rig.clock.advance(1)
+    rig.platform.engine._held.add(job)  # as if a step for this job were in flight
     await rig.platform.engine.heartbeat()
     assert (await rig.row(job))["lease_expires_at"] == rig.clock.now_ms() + TTL_MS
     await rig.platform.engine.release_leases()
