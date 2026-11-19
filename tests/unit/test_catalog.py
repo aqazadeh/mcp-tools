@@ -42,9 +42,7 @@ def _catalog(available: bool = True) -> Catalog:
 
 def test_packaged_catalog_loads_and_mock_models_are_available() -> None:
     catalog = load_catalog()
-    assert {"mock_image", "mock_video", "mock_audio"} <= {
-        m.id for m in catalog.browse(PageRequest(limit=50)).items
-    }
+    assert {"mock_image", "mock_video", "mock_audio"} <= {m.id for m in catalog.browse(PageRequest(limit=50)).items}
     assert catalog.get("mock_image").pricing.credits == 10
     assert catalog.by_task("upscale")[0].id == "mock_upscale"
 

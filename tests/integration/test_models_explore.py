@@ -33,9 +33,7 @@ async def test_list_search_get_recommend(client: Client) -> None:
     found = payload(await client.call_tool("models_explore", {"action": "search", "query": "upscale"}))
     assert [m["id"] for m in found["items"]] == ["mock_upscale"]
 
-    detail = payload(await client.call_tool("models_explore", {"action": "get", "model_id": "mock_video"}))[
-        "model"
-    ]
+    detail = payload(await client.call_tool("models_explore", {"action": "get", "model_id": "mock_video"}))["model"]
     assert {p["name"] for p in detail["parameters"]} == {"duration", "resolution", "simulate"}
     assert detail["medias"][0]["role"] == "start_image"
     assert detail["pricing"] == {
@@ -45,9 +43,7 @@ async def test_list_search_get_recommend(client: Client) -> None:
     }
 
     recommended = payload(
-        await client.call_tool(
-            "models_explore", {"action": "recommend", "query": "a short video from a photo"}
-        )
+        await client.call_tool("models_explore", {"action": "recommend", "query": "a short video from a photo"})
     )
     assert recommended["items"][0]["id"] == "mock_video"
 

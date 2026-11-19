@@ -48,9 +48,7 @@ async def models_explore(
     ] = "",
     model_id: Annotated[str, Field(description="Model id; required for action 'get'.", max_length=64)] = "",
     limit: Annotated[int, Field(description="Page size, 1-50 (default 20; 5 for recommend).")] = 0,
-    cursor: Annotated[
-        str, Field(description="next_cursor from the previous page; keep the same filters.")
-    ] = "",
+    cursor: Annotated[str, Field(description="next_cursor from the previous page; keep the same filters.")] = "",
 ) -> Annotated[CallToolResult, ModelsExploreResult]:
     catalog = platform_of(ctx).catalog
     require_choice("action", action, ACTIONS)

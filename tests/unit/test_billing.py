@@ -147,9 +147,7 @@ async def test_entries_are_newest_first_and_paginated(store: Store, clock: FakeC
     assert len(spends.items) == 3 and spends.items[0].balance_after == 97
 
 
-async def test_idempotency_replays_same_request_and_rejects_a_different_one(
-    store: Store, clock: FakeClock
-) -> None:
+async def test_idempotency_replays_same_request_and_rejects_a_different_one(store: Store, clock: FakeClock) -> None:
     idem = IdempotencyStore(clock, window_ms=1000)
     digest = request_hash({"model": "m", "prompt": "p"})
     async with store.write_tx() as conn:

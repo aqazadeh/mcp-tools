@@ -67,11 +67,12 @@ def build_server(
     *,
     capabilities: Capabilities | None = None,
     extra_tools: Sequence[ToolDef] = (),
+    platform: Platform | None = None,
 ) -> Built:
     settings = settings or Settings()
     configure_logging(settings.log_level)
     caps = capabilities or Capabilities(ui=settings.ui_enabled)
-    platform = Platform(settings)
+    platform = platform or Platform(settings)
 
     @asynccontextmanager
     async def lifespan(_server: MCPServer[Platform]) -> AsyncIterator[Platform]:

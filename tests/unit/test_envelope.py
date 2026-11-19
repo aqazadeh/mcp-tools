@@ -30,9 +30,7 @@ async def echo(ctx: Context, value: int = 0, max_credits: int = -1) -> Annotated
 
 
 async def refuses(ctx: Context) -> Annotated[CallToolResult, Res]:
-    raise ApiError(
-        "budget_exceeded", "too expensive", hint="lower count", recovery_tool="echo", allowed=[1, 2]
-    )
+    raise ApiError("budget_exceeded", "too expensive", hint="lower count", recovery_tool="echo", allowed=[1, 2])
 
 
 async def crashes(ctx: Context) -> Annotated[CallToolResult, Res]:

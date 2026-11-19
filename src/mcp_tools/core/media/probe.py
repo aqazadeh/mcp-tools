@@ -115,9 +115,7 @@ def probe(path: Path, kind: str, ext: str) -> Probe:
     return _ffprobe(path)
 
 
-def make_preview(
-    path: Path, *, max_side: int = PREVIEW_MAX_SIDE, max_bytes: int = PREVIEW_MAX_BYTES
-) -> bytes:
+def make_preview(path: Path, *, max_side: int = PREVIEW_MAX_SIDE, max_bytes: int = PREVIEW_MAX_BYTES) -> bytes:
     """A small JPEG of the first frame, for the model (or a widget) to look at."""
     with _open_image(path) as image:
         image.seek(0)

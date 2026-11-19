@@ -28,6 +28,9 @@ CONTEXT_PARAM = "ctx"
 
 FAMILY_MODULES: dict[str, str] = {
     "catalog": "mcp_tools.server.families.catalog",
+    "generate": "mcp_tools.server.families.generate",
+    "jobs": "mcp_tools.server.families.jobs",
+    "billing": "mcp_tools.server.families.billing",
 }
 
 
@@ -101,9 +104,7 @@ def _check_result_model(tool: str, model: type[BaseModel]) -> None:
     """Results are sent without nulls, so a nullable field must not be required."""
     for name, info in model.model_fields.items():
         if info.alias is not None and info.alias != name:
-            raise RegistryError(
-                f"{tool}: result field {name!r} uses an alias; results are dumped by field name"
-            )
+            raise RegistryError(f"{tool}: result field {name!r} uses an alias; results are dumped by field name")
         if _allows_none(info.annotation) and info.is_required():
             raise RegistryError(f"{tool}: nullable result field {name!r} needs a default")
 
@@ -118,9 +119,7 @@ def validate_defs(defs: Sequence[ToolDef]) -> None:
             raise RegistryError(f"{d.name!r}: tool names must match {NAME_PATTERN.pattern}")
         text = d.description.strip()
         if not text or len(text) > MAX_DESCRIPTION_CHARS:
-            raise RegistryError(
-                f"{d.name}: description must be 1..{MAX_DESCRIPTION_CHARS} characters, got {len(text)}"
-            )
+            raise RegistryError(f"{d.name}: description must be 1..{MAX_DESCRIPTION_CHARS} characters, got {len(text)}")
         handler = d.handler
         if not inspect.iscoroutinefunction(handler) or not inspect.isfunction(handler):
             raise RegistryError(f"{d.name}: handler must be a plain `async def` function")
@@ -138,9 +137,7 @@ def validate_defs(defs: Sequence[ToolDef]) -> None:
         if not d.visibility or not set(d.visibility) <= {"model", "app"}:
             raise RegistryError(f"{d.name}: visibility must be a non-empty subset of ('model', 'app')")
         if "app" in d.visibility and d.effects and not d.app_helper:
-            raise RegistryError(
-                f"{d.name}: tools with effects {sorted(d.effects)} must not be callable from widgets"
-            )
+            raise RegistryError(f"{d.name}: tools with effects {sorted(d.effects)} must not be callable from widgets")
         if d.app_helper and d.visibility != ("app",):
             raise RegistryError(f"{d.name}: app helpers must have visibility ('app',)")
         if d.ui_uri is not None and not d.ui_uri.startswith("ui://"):
@@ -158,8 +155,6 @@ def collect(families: Sequence[str], capabilities: Capabilities) -> list[ToolDef
         for d in module.tools():
             if d.family != family:
                 raise RegistryError(f"{d.name}: declared family {d.family!r} but lives in {family!r}")
-            if capabilities.has(d.requires) and (
-                d.ui_uri is None or capabilities.ui or "model" in d.visibility
-            ):
+            if capabilities.has(d.requires) and (d.ui_uri is None or capabilities.ui or "model" in d.visibility):
                 defs.append(d)
     return defs

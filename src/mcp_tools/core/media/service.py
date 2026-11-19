@@ -103,9 +103,7 @@ def _unsupported(detail: str) -> ApiError:
 
 
 class MediaService:
-    def __init__(
-        self, store: Store, blobs: LocalBlobStore, clock: Clock, *, limits: MediaLimits | None = None
-    ) -> None:
+    def __init__(self, store: Store, blobs: LocalBlobStore, clock: Clock, *, limits: MediaLimits | None = None) -> None:
         self._store = store
         self._blobs = blobs
         self._clock = clock
@@ -233,9 +231,7 @@ class MediaService:
         blob = await self.store_stream(chunks, max_bytes=max_bytes, accept=accept)
 
         async def unit(conn: AsyncConnection) -> None:
-            await self.insert(
-                conn, blob, principal=principal, source=source, filename=filename, origin=origin
-            )
+            await self.insert(conn, blob, principal=principal, source=source, filename=filename, origin=origin)
 
         try:
             await self._store.write(unit)
@@ -319,9 +315,7 @@ class MediaService:
         if isinstance(before, str):
             query = query.where(media.c.id < before)
         async with self._store.read_tx() as conn:
-            rows = (
-                (await conn.execute(query.order_by(media.c.id.desc()).limit(page.limit + 1))).mappings().all()
-            )
+            rows = (await conn.execute(query.order_by(media.c.id.desc()).limit(page.limit + 1))).mappings().all()
         items = [MediaRow.from_mapping(r) for r in rows[: page.limit]]
         has_more = len(rows) > page.limit
         return Page(

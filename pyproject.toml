@@ -49,7 +49,7 @@ filterwarnings = [
 ]
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py311"
 src = ["src", "tests"]
 
@@ -60,10 +60,11 @@ ignore = [
     "RUF001", # Turkish text in docs and comments
     "RUF002",
     "RUF003",
+    "ASYNC109", # `timeout` parameters are part of our own API (jobs.wait)
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "B011", "PT018", "PT012"]
+"tests/**" = ["S", "B011", "PT018", "PT012", "ASYNC110", "ASYNC240"]
 
 [tool.pyright]
 include = ["src", "tests"]

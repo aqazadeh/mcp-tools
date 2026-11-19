@@ -72,9 +72,7 @@ class IdempotencyStore:
         if claimed is not None:
             return None
         row = (
-            await conn.execute(
-                select(idempotency_keys.c.request_hash, idempotency_keys.c.response_json).where(*where)
-            )
+            await conn.execute(select(idempotency_keys.c.request_hash, idempotency_keys.c.response_json).where(*where))
         ).first()
         if row is None or row[0] != digest:
             raise ApiError(

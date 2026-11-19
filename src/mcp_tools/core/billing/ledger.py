@@ -66,20 +66,14 @@ class Ledger:
             await self.grant(conn, workspace_id, initial_credits, note="opening balance")
 
     async def balance(self, conn: AsyncConnection, workspace_id: str) -> Balance:
-        row = (
-            await conn.execute(select(accounts.c.balance).where(accounts.c.workspace_id == workspace_id))
-        ).first()
+        row = (await conn.execute(select(accounts.c.balance).where(accounts.c.workspace_id == workspace_id))).first()
         day = day_of(self._clock.now_ms())
         spent = (
             await conn.execute(
-                select(daily_spend.c.spent).where(
-                    daily_spend.c.workspace_id == workspace_id, daily_spend.c.day == day
-                )
+                select(daily_spend.c.spent).where(daily_spend.c.workspace_id == workspace_id, daily_spend.c.day == day)
             )
         ).first()
-        return Balance(
-            balance=row[0] if row else 0, spent_today=spent[0] if spent else 0, daily_cap=self.daily_cap
-        )
+        return Balance(balance=row[0] if row else 0, spent_today=spent[0] if spent else 0, daily_cap=self.daily_cap)
 
     async def spend(
         self, conn: AsyncConnection, workspace_id: str, amount: int, ref: Ref, *, note: str | None = None
@@ -97,9 +91,7 @@ class Ledger:
         conditions = [daily_spend.c.workspace_id == workspace_id, daily_spend.c.day == day]
         if self.daily_cap is not None:
             conditions.append(daily_spend.c.spent + amount <= self.daily_cap)
-        capped = await conn.execute(
-            update(daily_spend).where(*conditions).values(spent=daily_spend.c.spent + amount)
-        )
+        capped = await conn.execute(update(daily_spend).where(*conditions).values(spent=daily_spend.c.spent + amount))
         if capped.rowcount != 1:
             raise ApiError(
                 BUDGET_EXCEEDED,
@@ -139,9 +131,7 @@ class Ledger:
         )
         return remaining[0]
 
-    async def refund(
-        self, conn: AsyncConnection, workspace_id: str, ref: Ref, *, note: str | None = None
-    ) -> int:
+    async def refund(self, conn: AsyncConnection, workspace_id: str, ref: Ref, *, note: str | None = None) -> int:
         """Return what was spent for `ref`. Exactly once: a second call refunds nothing and returns 0."""
         spent = (
             await conn.execute(
@@ -240,11 +230,7 @@ class Ledger:
         before = (page.cursor or {}).get("before")
         if isinstance(before, int):
             query = query.where(ledger_entries.c.id < before)
-        rows = (
-            (await conn.execute(query.order_by(ledger_entries.c.id.desc()).limit(page.limit + 1)))
-            .mappings()
-            .all()
-        )
+        rows = (await conn.execute(query.order_by(ledger_entries.c.id.desc()).limit(page.limit + 1))).mappings().all()
         items = [
             LedgerEntry(
                 id=r["id"],

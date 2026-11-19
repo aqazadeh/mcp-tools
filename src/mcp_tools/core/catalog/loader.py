@@ -132,15 +132,11 @@ class Catalog:
         if page.cursor is not None:
             offset = page.cursor.get("o", 0)
             if not isinstance(offset, int) or offset < 0:
-                raise ApiError(
-                    INVALID_PARAMS, "cursor is not valid", hint="Pass next_cursor exactly as returned."
-                )
+                raise ApiError(INVALID_PARAMS, "cursor is not valid", hint="Pass next_cursor exactly as returned.")
         chunk = models[offset : offset + page.limit]
         end = offset + len(chunk)
         has_more = end < len(models)
-        return Page(
-            items=chunk, has_more=has_more, next_cursor=encode_cursor({"o": end}) if has_more else None
-        )
+        return Page(items=chunk, has_more=has_more, next_cursor=encode_cursor({"o": end}) if has_more else None)
 
     def browse(
         self,
@@ -155,9 +151,7 @@ class Catalog:
     def _score(self, model: ModelSpec, words: list[str]) -> tuple[int, int]:
         """Return (matched word count, weighted score)."""
         strong = set(_tokens(model.id) + _tokens(model.name))
-        medium = set(
-            _tokens(" ".join([*model.tags, *model.use_cases, model.provider_name, model.output_type]))
-        )
+        medium = set(_tokens(" ".join([*model.tags, *model.use_cases, model.provider_name, model.output_type])))
         weak = set(_tokens(model.description))
         matched = score = 0
         for word in words:

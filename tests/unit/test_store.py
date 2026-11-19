@@ -32,10 +32,7 @@ async def _meta(store: Store, key: str) -> str | None:
 async def test_open_creates_schema_and_stamps_version(store: Store) -> None:
     assert await _meta(store, "schema_version") == str(schema.SCHEMA_VERSION)
     async with store.read_tx() as conn:
-        tables = {
-            r[0]
-            for r in (await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))).all()
-        }
+        tables = {r[0] for r in (await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))).all()}
     assert set(schema.metadata.tables) <= tables
 
 
@@ -82,9 +79,7 @@ async def test_foreign_keys_are_enforced(store: Store) -> None:
     with pytest.raises(IntegrityError):
         async with store.write_tx() as conn:
             await conn.execute(
-                schema.folders.insert().values(
-                    id="fld_x", project_id="prj_missing", name="n", depth=0, created_at=1
-                )
+                schema.folders.insert().values(id="fld_x", project_id="prj_missing", name="n", depth=0, created_at=1)
             )
 
 

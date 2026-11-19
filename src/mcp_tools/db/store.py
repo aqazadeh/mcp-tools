@@ -123,9 +123,7 @@ class Store:
         if foreign_keys != 1:
             raise StoreError("PRAGMA foreign_keys is not enabled on the write connection")
         if str(journal).lower() != "wal":
-            raise StoreError(
-                f"journal_mode is {journal!r}, expected WAL (is the data directory on a network share?)"
-            )
+            raise StoreError(f"journal_mode is {journal!r}, expected WAL (is the data directory on a network share?)")
         probe = "__self_test__"
         try:
             async with self.write_tx() as conn:
@@ -207,6 +205,4 @@ def _bootstrap(conn: Connection) -> None:
     for step in range(version, schema.SCHEMA_VERSION):
         MIGRATIONS[step - 1](conn)
     if version != schema.SCHEMA_VERSION:
-        conn.execute(
-            text("UPDATE meta SET value = :v WHERE key = 'schema_version'"), {"v": str(schema.SCHEMA_VERSION)}
-        )
+        conn.execute(text("UPDATE meta SET value = :v WHERE key = 'schema_version'"), {"v": str(schema.SCHEMA_VERSION)})

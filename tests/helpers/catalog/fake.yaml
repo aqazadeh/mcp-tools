@@ -1,0 +1,30 @@
+# Test-only models served by tests/helpers/providers.py::ScriptedProvider.
+provider: fake
+provider_name: Fake
+models:
+  - id: fake_image
+    name: Fake Image
+    description: Scripted asynchronous provider for engine tests.
+    output_type: image
+    aspect_ratios: ["1:1", "16:9"]
+    parameters:
+      - {name: quality, type: string, default: low, options: [low, high]}
+    medias:
+      - {role: image, kinds: [image], max: 2}
+    pricing: {unit: per_output, credits: 100, multipliers: {quality: {low: 1, high: 3}}}
+    deadline_seconds: 60
+  - id: fake_image_sync
+    name: Fake Image (synchronous)
+    description: Scripted provider whose submit returns the finished result.
+    output_type: image
+    execution: sync
+    pricing: {unit: per_output, credits: 50}
+    deadline_seconds: 60
+  - id: fake_video
+    name: Fake Video
+    description: Scripted video model.
+    output_type: video
+    parameters:
+      - {name: duration, type: integer, default: 4, min: 2, max: 10}
+    pricing: {unit: per_second, credits: 30}
+    deadline_seconds: 60

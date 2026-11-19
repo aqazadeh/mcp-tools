@@ -40,9 +40,7 @@ def ok(data: BaseModel, *, content: Sequence[ContentBlock] = ()) -> CallToolResu
     """Build a success result: compact JSON text without nulls plus structured content."""
     payload = data.model_dump(mode="json", exclude_none=True)
     text = _compact(payload)
-    extra = sum(
-        len(getattr(block, "data", "") or "") + len(getattr(block, "text", "") or "") for block in content
-    )
+    extra = sum(len(getattr(block, "data", "") or "") + len(getattr(block, "text", "") or "") for block in content)
     if len(text.encode()) + extra > MAX_RESULT_BYTES:
         return fail(
             ApiError(
@@ -56,9 +54,7 @@ def ok(data: BaseModel, *, content: Sequence[ContentBlock] = ()) -> CallToolResu
 
 def fail(err: ApiError) -> CallToolResult:
     """Build an error result the calling model (or a widget) can parse and act on."""
-    return CallToolResult(
-        content=[TextContent(type="text", text=_compact({"error": err.to_dict()}))], is_error=True
-    )
+    return CallToolResult(content=[TextContent(type="text", text=_compact({"error": err.to_dict()}))], is_error=True)
 
 
 def platform_of(ctx: Context) -> Platform:

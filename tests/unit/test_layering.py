@@ -35,10 +35,6 @@ def test_core_does_not_import_the_server_layer() -> None:
         for path in (SRC / package).rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.ImportFrom)
-                    and node.module
-                    and node.module.startswith("mcp_tools.server")
-                ):
+                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("mcp_tools.server"):
                     offenders.append(str(path.relative_to(SRC)))
     assert not offenders, offenders

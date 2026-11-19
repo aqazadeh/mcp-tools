@@ -88,9 +88,7 @@ async def test_annotated_calltoolresult_publishes_schema_and_passes_result_throu
     mcp = MCPServer("t")
 
     async def tool() -> Annotated[CallToolResult, Out]:
-        return CallToolResult(
-            content=[TextContent(type="text", text='{"value":1}')], structured_content={"value": 1}
-        )
+        return CallToolResult(content=[TextContent(type="text", text='{"value":1}')], structured_content={"value": 1})
 
     mcp.add_tool(tool, name="tool", structured_output=True)
     async with Client(mcp, raise_exceptions=True) as c:
@@ -216,14 +214,10 @@ async def test_http_app_has_its_own_host_allowlist_and_needs_a_running_session_m
     transport = httpx2.ASGITransport(app=app)
     timeout = httpx2.Timeout(30.0)
     async with mcp.session_manager.run():  # ASGITransport does not run the ASGI lifespan
-        async with httpx2.AsyncClient(
-            transport=transport, base_url="http://evil.test", timeout=timeout
-        ) as bad:
+        async with httpx2.AsyncClient(transport=transport, base_url="http://evil.test", timeout=timeout) as bad:
             rejected = await bad.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
         async with (
-            httpx2.AsyncClient(
-                transport=transport, base_url="http://127.0.0.1:8000", timeout=timeout
-            ) as good,
+            httpx2.AsyncClient(transport=transport, base_url="http://127.0.0.1:8000", timeout=timeout) as good,
             Client(streamable_http_client("http://127.0.0.1:8000/mcp", http_client=good)) as c,
         ):
             result = await c.call_tool("ping", {})

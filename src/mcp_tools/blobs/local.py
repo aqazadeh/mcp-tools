@@ -48,9 +48,7 @@ class LocalBlobStore:
                     await handle.write(chunk)
                 await handle.flush()
                 await anyio.to_thread.run_sync(os.fsync, handle.wrapped.fileno())
-            await anyio.to_thread.run_sync(
-                lambda: final.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            )
+            await anyio.to_thread.run_sync(lambda: final.parent.mkdir(mode=0o700, parents=True, exist_ok=True))
             await anyio.to_thread.run_sync(os.replace, temp, final)
         except BaseException:
             with anyio.CancelScope(shield=True):

@@ -162,9 +162,7 @@ async def test_ingest_rejects_non_media_and_wrong_kind(service: MediaService, bl
     with pytest.raises(ApiError):
         await service.ingest(_stream(b"\x89PNG\r\n\x1a\n" + b"junk" * 50), principal=LOCAL, source="upload")
     assert (
-        not [p for p in (blobs.root / "media").rglob("*") if p.is_file()]
-        if (blobs.root / "media").exists()
-        else True
+        not [p for p in (blobs.root / "media").rglob("*") if p.is_file()] if (blobs.root / "media").exists() else True
     )
 
 
@@ -182,9 +180,7 @@ async def test_media_is_scoped_to_the_workspace_and_listed_newest_first(service:
     rows = []
     for index in range(3):
         clock.advance(1)
-        rows.append(
-            await service.ingest(_stream(samples.png_bytes(8 + index, 8)), principal=LOCAL, source="upload")
-        )
+        rows.append(await service.ingest(_stream(samples.png_bytes(8 + index, 8)), principal=LOCAL, source="upload"))
     await service.ingest(_stream(samples.wav_bytes()), principal=LOCAL, source="import_url")
 
     images = await service.list(PageRequest(limit=2), principal=LOCAL, kind="image")
@@ -207,9 +203,7 @@ async def test_job_output_is_registered_exactly_once(service: MediaService) -> N
     first = await service.store_bytes(samples.png_bytes())
     second = await service.store_bytes(samples.png_bytes())
     async with service._store.write_tx() as conn:
-        assert await service.insert(
-            conn, first, principal=LOCAL, source="job_output", job_id="job_a", output_index=0
-        )
+        assert await service.insert(conn, first, principal=LOCAL, source="job_output", job_id="job_a", output_index=0)
         assert not await service.insert(
             conn, second, principal=LOCAL, source="job_output", job_id="job_a", output_index=0
         )

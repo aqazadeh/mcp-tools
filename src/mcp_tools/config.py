@@ -22,19 +22,18 @@ ALL_FAMILIES = (
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MCP_TOOLS_", extra="ignore")
 
-    data_dir: Path = Field(
-        default=Path("~/.mcp-tools"), description="Where the database, blobs and keys live."
-    )
-    families: str = Field(
-        default="", description="Comma-separated tool families to enable; empty enables all."
-    )
-    ui_enabled: bool = Field(
-        default=True, description="Bind UI widgets (MCP Apps) to the tools that have one."
-    )
-    catalog_dirs: str = Field(
-        default="", description=f"Extra catalog directories, separated by {os.pathsep!r}."
-    )
+    data_dir: Path = Field(default=Path("~/.mcp-tools"), description="Where the database, blobs and keys live.")
+    families: str = Field(default="", description="Comma-separated tool families to enable; empty enables all.")
+    ui_enabled: bool = Field(default=True, description="Bind UI widgets (MCP Apps) to the tools that have one.")
+    catalog_dirs: str = Field(default="", description=f"Extra catalog directories, separated by {os.pathsep!r}.")
     log_level: str = Field(default="INFO")
+
+    job_concurrency: int = Field(default=4, ge=1, le=32, description="Jobs advanced in parallel.")
+    shutdown_grace_seconds: float = Field(default=1.5, ge=0, description="How long stop waits for the runner.")
+    lease_ttl_ms: int = Field(default=30_000, ge=200, description="How long a job lease lasts without a heartbeat.")
+    mock_delay_ms: int | None = Field(
+        default=None, ge=0, description="Override how long mock jobs take (tests and demos)."
+    )
 
     # Budget (estimates; 1 credit = 0.001 USD). These are the hard limits: nothing a tool
     # caller passes can raise them.
