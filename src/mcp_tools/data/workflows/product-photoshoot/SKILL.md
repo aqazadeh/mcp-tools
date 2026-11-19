@@ -11,8 +11,8 @@ are not to be reinvented.
 
 ## 1. Get the product photo in
 
-- A link: `media_import_url`. A local file: `media_import_path` (where offered) or
-  `media_upload` + `media_confirm`. Keep the returned `media_id`.
+- A link: `media_import_url`. A local file: `media_import_path`, or `media_upload` followed by
+  `media_confirm` - use whichever of these this server offers. Keep the returned `media_id`.
 - Look at it with `media_get` and `include_preview: true`. If it is blurry, cropped or
   cluttered, say so and ask for a better photo before spending anything.
 

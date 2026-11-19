@@ -9,6 +9,7 @@ from mcp import Client
 from mcp_tools.config import Settings
 from mcp_tools.core.workflows.loader import WorkflowError, load_workflows
 from mcp_tools.server.build import build_server
+from mcp_tools.server.registry import Capabilities
 from tests.conftest import error_of, payload
 
 pytestmark = pytest.mark.anyio
@@ -27,7 +28,7 @@ def bundle(root: Path, name: str, **files: str | bytes) -> Path:
     return folder
 
 
-async def test_catalog_instructions_and_files(client: Client) -> None:
+async def test_catalog_instructions_and_files(client: Client, settings: Settings) -> None:
     catalog = payload(await client.call_tool("workflow_instructions", {}))
     assert catalog["mode"] == "catalog"
     assert [w["name"] for w in catalog["workflows"]] == ["product-photoshoot", "storyboard-video"]
@@ -38,7 +39,11 @@ async def test_catalog_instructions_and_files(client: Client) -> None:
     assert loaded["files"] == [{"path": "shot-list-template.md", "size_bytes": loaded["files"][0]["size_bytes"]}]
     assert len(loaded["revision"]) == 16
 
-    names = {t.name for t in (await client.list_tools()).tools}
+    # every tool of every capability: a bundle may name tools that only some deployments offer
+    everything = build_server(
+        Settings(data_dir=settings.data_dir), capabilities=Capabilities(url_issuer=True, local_paths=True)
+    )
+    names = {d.name for d in everything.tools}
     for workflow in ("storyboard-video", "product-photoshoot"):
         text = payload(await client.call_tool("workflow_instructions", {"workflow": workflow}))["instructions"]
         mentioned = {word.strip("`.,:;()") for word in text.split() if word.startswith("`") and "_" in word}
