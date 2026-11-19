@@ -162,6 +162,13 @@ class JobService:
                         hint="Upload or import the file first and use the returned media_id.",
                         recovery_tool="media_list",
                     )
+                if found.status != "ready":
+                    raise ApiError(
+                        INVALID_PARAMS,
+                        f"media {ref.value} is not ready (status {found.status})",
+                        hint="Finish the upload and confirm it, then retry.",
+                        recovery_tool="media_list",
+                    )
                 row = found
             role = model.media_role(ref.role)
             assert role is not None

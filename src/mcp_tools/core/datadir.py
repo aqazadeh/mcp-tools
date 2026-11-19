@@ -81,3 +81,16 @@ def read_or_create_secret(path: Path, *, nbytes: int = 32) -> bytes:
     with os.fdopen(fd, "wb") as handle:
         handle.write(secret)
     return secret
+
+
+def write_private(path: Path, data: bytes) -> None:
+    """Replace a file atomically with 0600 content."""
+    temp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(temp, path)
+    except BaseException:
+        temp.unlink(missing_ok=True)
+        raise

@@ -47,6 +47,16 @@ class Settings(BaseSettings):
         "environment's proxy; weaker checks), off, or auto (proxy if the environment sets one).",
     )
 
+    # HTTP transport
+    http_host: str = Field(default="127.0.0.1", description="Address the HTTP server binds to.")
+    http_port: int = Field(default=8000, ge=1, le=65535)
+    public_base_url: str = Field(
+        default="", description="URL clients reach this server at (https://host[:port]); used in signed file links."
+    )
+    http_allowed_hosts: str = Field(default="", description="Extra accepted Host header values, comma-separated.")
+    http_allowed_origins: str = Field(default="", description="Accepted browser Origin values, comma-separated.")
+    api_key: str = Field(default="", description="API key for HTTP; if empty one is generated and stored hashed.")
+
     # Budget (estimates; 1 credit = 0.001 USD). These are the hard limits: nothing a tool
     # caller passes can raise them.
     initial_credits: int = Field(default=10_000, ge=0, description="Opening balance of a new data directory.")

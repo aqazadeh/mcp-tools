@@ -7,9 +7,10 @@ from mcp.server.mcpserver import Context
 from mcp_types import CallToolResult, ContentBlock, ImageContent, ToolAnnotations
 from pydantic import Field
 
+from mcp_tools.core.errors import INVALID_PARAMS, UNSUPPORTED, ApiError
 from mcp_tools.core.pagination import page_request
 from mcp_tools.server.envelope import ok, platform_of
-from mcp_tools.server.params import Wire, choice, optional_choice
+from mcp_tools.server.params import NextStep, Wire, choice, optional_choice
 from mcp_tools.server.registry import ToolDef
 
 KINDS = ("image", "video", "audio")
@@ -103,6 +104,95 @@ async def media_list(
     )
 
 
+UPLOAD_TTL_SECONDS = 15 * 60
+MAX_UPLOAD_FILES = 8
+
+
+class UploadFile(Wire):
+    filename: str = Field(default="", description="Original file name, for display only.", max_length=255)
+
+
+class UploadSlot(Wire):
+    media_id: str
+    upload_url: str
+    method: str = "PUT"
+    filename: str | None = None
+
+
+class UploadResult(Wire):
+    kind: Literal["upload"] = "upload"
+    schema_version: int = 1
+    uploads: list[UploadSlot]
+    expires_in_seconds: int
+    max_bytes: int
+    next: NextStep
+    message: str
+
+
+class ConfirmResult(Wire):
+    kind: Literal["upload_confirm"] = "upload_confirm"
+    schema_version: int = 1
+    items: list[dict[str, Any]]
+    all_ready: bool
+    message: str | None = None
+
+
+async def media_upload(
+    ctx: Context,
+    files: Annotated[list[UploadFile], Field(description="1-8 files to upload; one upload link is returned for each.")],
+) -> Annotated[CallToolResult, UploadResult]:
+    platform = platform_of(ctx)
+    if not files or len(files) > MAX_UPLOAD_FILES:
+        raise ApiError(INVALID_PARAMS, f"pass 1 to {MAX_UPLOAD_FILES} files", hint="Upload larger sets in groups.")
+    max_bytes = platform.media.limits.largest
+    slots = []
+    for item in files:
+        media_id, nonce, _expires = await platform.media.reserve_upload(
+            principal=platform.principal, filename=item.filename or None, ttl_seconds=UPLOAD_TTL_SECONDS
+        )
+        url = platform.urls.upload_url(media_id, ttl_seconds=UPLOAD_TTL_SECONDS, max_bytes=max_bytes, nonce=nonce)
+        if url is None:
+            raise ApiError(UNSUPPORTED, "uploads are not available on this server", hint="Use media_import_url.")
+        slots.append(UploadSlot(media_id=media_id, upload_url=url, filename=item.filename or None))
+    return ok(
+        UploadResult(
+            uploads=slots,
+            expires_in_seconds=UPLOAD_TTL_SECONDS,
+            max_bytes=max_bytes,
+            next=NextStep(tool="media_confirm", hint="After every PUT succeeded, pass the media_ids."),
+            message="Send each file's raw bytes with one HTTP PUT to its upload_url (no auth header, no form "
+            "encoding), e.g. curl -T <file> '<upload_url>'. Each link works once.",
+        )
+    )
+
+
+async def media_confirm(
+    ctx: Context,
+    media_ids: Annotated[list[str], Field(description="1-8 media ids returned by media_upload.")],
+) -> Annotated[CallToolResult, ConfirmResult]:
+    platform = platform_of(ctx)
+    if not media_ids or len(media_ids) > MAX_UPLOAD_FILES:
+        raise ApiError(INVALID_PARAMS, f"pass 1 to {MAX_UPLOAD_FILES} media ids", hint="Confirm larger sets in groups.")
+    ids = [str(m) for m in media_ids]
+    statuses = await platform.media.confirm_uploads(ids, principal=platform.principal)
+    rows = {row.id: row for row in await platform.media.get_many(ids, principal=platform.principal)}
+    items: list[dict[str, Any]] = []
+    for media_id in ids:
+        status = statuses[media_id]
+        item: dict[str, Any] = {"media_id": media_id, "status": status}
+        if status == "ready" and media_id in rows:
+            item = {**platform.jobs.media_view(rows[media_id]).to_dict(), "status": status}
+        items.append(item)
+    all_ready = all(item["status"] == "ready" for item in items)
+    return ok(
+        ConfirmResult(
+            items=items,
+            all_ready=all_ready,
+            message=None if all_ready else "not_uploaded: the PUT has not succeeded yet; upload, then confirm again.",
+        )
+    )
+
+
 _READ = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
 
 
@@ -140,6 +230,39 @@ def tools() -> list[ToolDef]:
             ),
             effects=frozenset({"write", "filesystem"}),
             requires=frozenset({"local_paths"}),
+        ),
+        ToolDef(
+            name="media_upload",
+            family="media",
+            handler=media_upload,
+            title="Upload media",
+            description=(
+                "Get one-time upload links for files you can read yourself (e.g. in a sandbox). For each file "
+                "PUT the raw bytes to its upload_url, then call media_confirm with the media_ids; only then can "
+                "the ids be used as medias values. Links expire in 15 minutes. For a file that is already at a "
+                "public URL use media_import_url instead. Costs no credits."
+            ),
+            annotations=ToolAnnotations(
+                read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+            ),
+            effects=frozenset({"write"}),
+            requires=frozenset({"url_issuer"}),
+        ),
+        ToolDef(
+            name="media_confirm",
+            family="media",
+            handler=media_confirm,
+            title="Confirm uploads",
+            description=(
+                "Finish uploads started with media_upload: checks that each file arrived, detects its type "
+                "from the content and marks it ready. Call it once after the PUTs succeeded. Items reported "
+                "as not_uploaded have not received their file yet. Safe to repeat."
+            ),
+            annotations=ToolAnnotations(
+                read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+            ),
+            effects=frozenset({"write"}),
+            requires=frozenset({"url_issuer"}),
         ),
         ToolDef(
             name="media_get",

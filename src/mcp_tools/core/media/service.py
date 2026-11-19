@@ -4,6 +4,7 @@ A source is stored once. Its type, extension and MIME type come from sniffing th
 every ingest path, never from a file name or a declared content type.
 """
 
+import secrets
 import unicodedata
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from mcp_tools.blobs.base import BlobTooLarge
@@ -30,6 +31,8 @@ from mcp_tools.db.store import Store
 MB = 1024 * 1024
 MAX_FILENAME_CHARS = 128
 _BIDI_AND_FORMAT = {"Cf", "Cc", "Cs", "Co", "Cn"}
+
+MAX_PENDING_UPLOADS = 50
 
 
 @dataclass(frozen=True)
@@ -239,6 +242,137 @@ class MediaService:
             await self.discard_key(blob.key)
             raise
         return await self.get(blob.media_id, principal=principal)
+
+    # -- uploads (HTTP mode): reserve -> PUT -> confirm ------------------------------------
+    async def reserve_upload(
+        self, *, principal: Principal, filename: str | None, ttl_seconds: int
+    ) -> tuple[str, str, int]:
+        """Create a pending media row. Returns (media_id, single-use nonce, expiry in epoch ms)."""
+        now = self._clock.now_ms()
+        media_id = new_id("med", now)
+        nonce = secrets.token_urlsafe(24)
+        expires_at = now + ttl_seconds * 1000
+
+        async def unit(conn: AsyncConnection) -> None:
+            pending = (
+                await conn.execute(
+                    select(func.count())
+                    .select_from(media)
+                    .where(
+                        media.c.workspace_id == principal.workspace_id,
+                        media.c.status == "pending",
+                        media.c.expires_at > now,
+                    )
+                )
+            ).scalar_one()
+            if pending >= MAX_PENDING_UPLOADS:
+                raise ApiError(
+                    QUOTA_EXCEEDED,
+                    "too many uploads are waiting to be finished",
+                    hint="Finish or confirm the open uploads first; unfinished ones expire on their own.",
+                )
+            await conn.execute(
+                media.insert().values(
+                    id=media_id,
+                    workspace_id=principal.workspace_id,
+                    kind="pending",
+                    mime="application/octet-stream",
+                    status="pending",
+                    source="upload",
+                    filename=sanitize_filename(filename),
+                    upload_nonce=nonce,
+                    created_at=now,
+                    expires_at=expires_at,
+                )
+            )
+
+        await self._store.write(unit)
+        return media_id, nonce, expires_at
+
+    async def upload_open(self, media_id: str, nonce: str) -> bool:
+        """True while this upload slot can still receive its one PUT."""
+        async with self._store.read_tx() as conn:
+            row = (
+                await conn.execute(
+                    select(media.c.expires_at).where(
+                        media.c.id == media_id, media.c.status == "pending", media.c.upload_nonce == nonce
+                    )
+                )
+            ).first()
+        return row is not None and (row[0] or 0) > self._clock.now_ms()
+
+    async def receive_upload(self, media_id: str, nonce: str, chunks: AsyncIterator[bytes], *, max_bytes: int) -> bool:
+        """Store the uploaded bytes and attach them to the pending row, consuming the nonce.
+
+        Returns False when the slot was used, expired or removed in the meantime; the bytes are
+        then discarded. The row stays `pending` until `confirm`.
+        """
+        blob = await self.store_stream(chunks, max_bytes=max_bytes)
+        now = self._clock.now_ms()
+
+        async def unit(conn: AsyncConnection) -> bool:
+            changed = await conn.execute(
+                update(media)
+                .where(
+                    media.c.id == media_id,
+                    media.c.status == "pending",
+                    media.c.upload_nonce == nonce,
+                    media.c.expires_at > now,
+                )
+                .values(
+                    upload_nonce=None,
+                    kind=blob.kind,
+                    mime=blob.mime,
+                    blob_key=blob.key,
+                    size_bytes=blob.size,
+                    sha256=blob.sha256,
+                    width=blob.width,
+                    height=blob.height,
+                    duration_ms=blob.duration_ms,
+                )
+            )
+            return changed.rowcount == 1
+
+        try:
+            attached = await self._store.write(unit)
+        except BaseException:
+            await self.discard_key(blob.key)
+            raise
+        if not attached:
+            await self.discard_key(blob.key)
+        return attached
+
+    async def confirm_uploads(self, media_ids: list[str], *, principal: Principal) -> dict[str, str]:
+        """Mark uploaded files ready. Returns a status per id: ready, not_uploaded or not_found."""
+        wanted = [m for m in media_ids if is_id(m, "med")]
+
+        async def unit(conn: AsyncConnection) -> dict[str, str]:
+            if wanted:
+                await conn.execute(
+                    update(media)
+                    .where(
+                        media.c.id.in_(wanted),
+                        media.c.workspace_id == principal.workspace_id,
+                        media.c.status == "pending",
+                        media.c.blob_key.is_not(None),
+                    )
+                    .values(status="ready", expires_at=None)
+                )
+                rows = (
+                    await conn.execute(
+                        select(media.c.id, media.c.status).where(
+                            media.c.id.in_(wanted), media.c.workspace_id == principal.workspace_id
+                        )
+                    )
+                ).all()
+            else:
+                rows = []
+            found = {row[0]: row[1] for row in rows}
+            return {
+                m: {"ready": "ready", "pending": "not_uploaded"}.get(found.get(m, ""), "not_found") for m in media_ids
+            }
+
+        return await self._store.write(unit)
 
     async def discard_key(self, key: str) -> None:
         """Delete a blob that will not get a row (lost finalize, rejected file)."""
