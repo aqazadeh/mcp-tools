@@ -228,12 +228,12 @@ async def test_openai_image_generation_is_synchronous_json(tmp_path: Path) -> No
     script = Script(lambda r: httpx2.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG).decode()}]}))
     provider = openai(script)
     submitted = await provider.submit(
-        request_for("gpt_image_2", tmp_path, aspect_ratio="3:2", quality="high", output_format="png")
+        request_for("gpt_image_2_6_flare", tmp_path, aspect_ratio="3:2", quality="high", output_format="png")
     )
     (sent,) = script.requests
     assert sent.url.path == "/v1/images/generations" and sent.headers["openai-project"] == "proj_1"
     assert json.loads(sent.content) == {
-        "model": "gpt-image-2", "prompt": "a fox", "size": "1536x1024",
+        "model": "gpt-image-2.6-flare", "prompt": "a fox", "size": "1536x1024",
         "quality": "high", "output_format": "png", "n": 1,
     }  # fmt: skip
     assert submitted.remote_id is None and submitted.result is not None and submitted.result.state == "succeeded"
@@ -247,13 +247,17 @@ async def test_openai_image_edit_sends_reference_files_as_multipart(tmp_path: Pa
     script = Script(lambda r: httpx2.Response(200, json={"data": [{"b64_json": base64.b64encode(PNG).decode()}]}))
     await openai(script).submit(
         request_for(
-            "gpt_image_2", tmp_path, medias=[("image", PNG), ("image", PNG)], quality="medium", output_format="png"
+            "gpt_image_2_6_flare",
+            tmp_path,
+            medias=[("image", PNG), ("image", PNG)],
+            quality="medium",
+            output_format="png",
         )
     )
     (sent,) = script.requests
     assert sent.url.path == "/v1/images/edits" and sent.headers["content-type"].startswith("multipart/form-data")
     assert sent.content.count(b'name="image[]"') == 2 and b'name="prompt"' in sent.content
-    assert b'name="model"\r\n\r\ngpt-image-2' in sent.content
+    assert b'name="model"\r\n\r\ngpt-image-2.6-flare' in sent.content
 
 
 async def test_openai_speech_returns_audio_bytes(tmp_path: Path) -> None:
@@ -302,11 +306,15 @@ async def test_openai_video_is_asynchronous_multipart(tmp_path: Path) -> None:
 async def test_openai_content_refusals_become_moderated(tmp_path: Path) -> None:
     refusal = {"error": {"message": "Your request was rejected by the safety system.", "code": "moderation_blocked"}}
     with pytest.raises(ProviderError) as caught:
-        await openai(Script(lambda r: httpx2.Response(400, json=refusal))).submit(request_for("gpt_image_2", tmp_path))
+        await openai(Script(lambda r: httpx2.Response(400, json=refusal))).submit(
+            request_for("gpt_image_2_6_flare", tmp_path)
+        )
     assert caught.value.code == "content_policy" and not caught.value.ambiguous
     with pytest.raises(ProviderError) as plain:
         bad = {"error": {"message": "Unknown parameter", "code": "unknown_parameter"}}
-        await openai(Script(lambda r: httpx2.Response(400, json=bad))).submit(request_for("gpt_image_2", tmp_path))
+        await openai(Script(lambda r: httpx2.Response(400, json=bad))).submit(
+            request_for("gpt_image_2_6_flare", tmp_path)
+        )
     assert plain.value.code == "unknown_parameter"
 
 
@@ -315,17 +323,24 @@ async def test_a_real_adapter_runs_through_the_job_engine(tmp_path: Path) -> Non
     def handler(request: httpx2.Request) -> httpx2.Response:
         if b"forbidden" in request.content:
             return httpx2.Response(400, json={"error": {"message": "blocked", "code": "moderation_blocked"}})
-        return httpx2.Response(200, json={"data": [{"b64_json": base64.b64encode(png_bytes(48, 32)).decode()}]})
+        usage = {
+            "input_tokens": 50,
+            "input_tokens_details": {"text_tokens": 40, "image_tokens": 10},
+            "output_tokens": 600,
+            "total_tokens": 650,
+        }
+        image = base64.b64encode(png_bytes(48, 32)).decode()
+        return httpx2.Response(200, json={"data": [{"b64_json": image}], "usage": usage})
 
     script = Script(handler)
     settings = Settings(data_dir=tmp_path / "data", log_level="WARNING", initial_credits=1_000)
     platform = Platform(settings, providers=[OpenAIProvider("sk-secret-key-value", transport=script.transport)])
     async with platform.running():
-        assert platform.catalog.public(platform.catalog.get("gpt_image_2"))["available"] is True
+        assert platform.catalog.public(platform.catalog.get("gpt_image_2_6_flare"))["available"] is True
 
         async def run(prompt: str) -> Any:
             outcome = await platform.jobs.create(
-                [GenerationRequest(0, {"model": "gpt_image_2", "prompt": prompt, "quality": "low"})],
+                [GenerationRequest(0, {"model": "gpt_image_2_6_flare", "prompt": prompt, "quality": "low"})],
                 principal=platform.principal,
                 tool="generate_image",
                 output_type="image",
@@ -336,10 +351,25 @@ async def test_a_real_adapter_runs_through_the_job_engine(tmp_path: Path) -> Non
             return outcome, waited.jobs[0]
 
         outcome, job = await run("a fox")
-        assert outcome.credits_total == 14 and job.status == "completed"
+        assert outcome.credits_total == 20 and job.status == "completed"
         assert (job.results[0].width, job.results[0].height, job.results[0].mime) == (48, 32, "image/png")
+        # The provider's own usage is kept on the job: 40*5 + 10*8 + 600*30 per 1M tokens.
+        assert job.provider_usage == {
+            "input_tokens": 50, "input_image_tokens": 10, "output_tokens": 600, "cost_usd": 0.01828,
+        }  # fmt: skip
+        assert job.to_dict()["provider_usage"]["cost_usd"] == 0.01828
 
         _, refused = await run("something forbidden")
         assert refused.status == "moderated" and refused.error == {"code": "content_policy", "message": "blocked"}
         async with platform.store.read_tx() as conn:
-            assert (await platform.ledger.balance(conn, "ws_local")).balance == 1_000 - 14
+            assert (await platform.ledger.balance(conn, "ws_local")).balance == 1_000 - 20
+
+
+def test_image_usage_tolerates_missing_or_odd_fields() -> None:
+    from mcp_tools.providers.openai import image_usage
+
+    assert image_usage(None) is None and image_usage("x") is None
+    assert image_usage({"input_tokens": 20, "output_tokens": 1000}) == {
+        "input_tokens": 20, "input_image_tokens": 0, "output_tokens": 1000, "cost_usd": 0.0301,
+    }  # fmt: skip
+    assert image_usage({"input_tokens": -3, "output_tokens": True})["cost_usd"] == 0

@@ -28,7 +28,7 @@ async def test_list_search_get_recommend(client: Client) -> None:
     listed = payload(await client.call_tool("models_explore", {"action": "list", "type": "image"}))
     assert listed["kind"] == "models" and listed["has_more"] is False
     ids = [m["id"] for m in listed["items"]]
-    assert ids[0] == "mock_image" and {"gpt_image_2", "flux_schnell"} <= set(ids)  # usable models come first
+    assert ids[0] == "mock_image" and {"gpt_image_2_6_flare", "flux_schnell"} <= set(ids)  # usable models come first
     assert "mock_upscale" not in ids and "recraft_crisp_upscale" not in ids  # transforms are not generation models
     assert [m["available"] for m in listed["items"]] == [True] + [False] * (len(ids) - 1)  # no provider keys here
 

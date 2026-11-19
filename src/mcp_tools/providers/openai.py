@@ -38,6 +38,9 @@ MODERATION_CODES = frozenset(
     {"moderation_blocked", "content_policy_violation", "image_content_policy_violation", "content_filter"}
 )
 IMAGE_SIZES = {"1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536"}
+# USD per 1M tokens for the gpt-image-2 family (2.5 and 2.6 use the same rates), from OpenAI's
+# pricing page on 2026-11-19. Used only to put a cost figure next to the reported usage.
+IMAGE_TOKEN_RATES = {"text_input": 5.0, "image_input": 8.0, "output": 30.0}
 VIDEO_SIZES = {"16:9": "1280x720", "9:16": "720x1280"}
 _CHUNK = 256 * 1024
 _MAX_INLINE_RESULTS = 32
@@ -80,14 +83,14 @@ class OpenAIProvider:
         self._results.clear()
         await self._http.aclose()
 
-    def _finished(self, data: bytes) -> Submitted:
+    def _finished(self, data: bytes, usage: JsonDict | None = None) -> Submitted:
         if len(self._results) >= _MAX_INLINE_RESULTS:
             self._results.pop(next(iter(self._results)))
         token = secrets.token_hex(8)
         self._results[token] = data
         return Submitted(
             remote_id=None,
-            result=PollResult("succeeded", progress=1.0, outputs=(OutputRef(state={"inline": token}),)),
+            result=PollResult("succeeded", progress=1.0, outputs=(OutputRef(state={"inline": token}),), usage=usage),
         )
 
     # -- submit ------------------------------------------------------------------------------
@@ -135,9 +138,10 @@ class OpenAIProvider:
         if not isinstance(encoded, str):
             raise ProviderError("no_output", "the provider returned no image")
         try:
-            return self._finished(base64.b64decode(encoded, validate=False))
+            data = base64.b64decode(encoded, validate=False)
         except (binascii.Error, ValueError) as exc:
             raise ProviderError("invalid_output", "the provider returned an unreadable image") from exc
+        return self._finished(data, image_usage(body.get("usage")))
 
     async def _speech(self, request: ProviderRequest) -> Submitted:
         fields = self._fields(request, {})
@@ -211,3 +215,26 @@ class OpenAIProvider:
     async def describe_model(self, provider_ref: str) -> JsonDict:
         model = await self._http.json("GET", f"/models/{provider_ref}", write=False)
         return {"id": model.get("id"), "owned_by": model.get("owned_by")}
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def image_usage(raw: Any) -> JsonDict | None:
+    """The token counts an image response reports, plus what they cost at list price."""
+    if not isinstance(raw, dict):
+        return None
+    details = raw.get("input_tokens_details") if isinstance(raw.get("input_tokens_details"), dict) else {}
+    input_tokens = _count(raw.get("input_tokens"))
+    image_in = _count(details.get("image_tokens"))
+    text_in = _count(details.get("text_tokens")) if "text_tokens" in details else max(0, input_tokens - image_in)
+    output_tokens = _count(raw.get("output_tokens"))
+    rates = IMAGE_TOKEN_RATES
+    cost = (text_in * rates["text_input"] + image_in * rates["image_input"] + output_tokens * rates["output"]) / 1e6
+    return {
+        "input_tokens": input_tokens,
+        "input_image_tokens": image_in,
+        "output_tokens": output_tokens,
+        "cost_usd": round(cost, 6),
+    }

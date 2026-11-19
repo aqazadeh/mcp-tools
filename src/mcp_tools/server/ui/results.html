@@ -59,8 +59,10 @@
   var TERMINAL = { completed: 1, failed: 1, canceled: 1, moderated: 1, not_found: 1 };
   var DATA_IMAGE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
   var MAX_POLL_MS = 15 * 60 * 1000;
+  var REQUEST_TIMEOUT_MS = 20000;
+  var PREVIEW_META = "mcp-tools/previews";
 
-  var nextId = 1, pending = {}, jobs = {}, order = [], previews = {}, wanted = {};
+  var nextId = 1, pending = {}, jobs = {}, order = [], previews = {}, wanted = {}, failed = {}, blocked = {};
   var pollTimer = null, pollDelay = 2000, pollStarted = 0, stopped = false, busy = false;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -69,7 +71,15 @@
   function request(method, params) {
     return new Promise(function (resolve, reject) {
       var id = nextId++;
-      pending[id] = { resolve: resolve, reject: reject };
+      // A host that never answers (some do not forward a widget's own tool calls) must not
+      // leave the request hanging: it would block the retry of whatever asked.
+      var timer = setTimeout(function () {
+        if (pending[id]) { delete pending[id]; reject({ code: -32001, message: "timed out" }); }
+      }, REQUEST_TIMEOUT_MS);
+      pending[id] = {
+        resolve: function (v) { clearTimeout(timer); resolve(v); },
+        reject: function (e) { clearTimeout(timer); reject(e); }
+      };
       post({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
     });
   }
@@ -124,9 +134,20 @@
     return null;
   }
 
+  // Previews the server sent with the result itself, so they show even when the host does not
+  // forward this widget's media_previews calls.
+  function takeInlinePreviews(result) {
+    var meta = result && result._meta && result._meta[PREVIEW_META];
+    if (!meta || typeof meta !== "object") return;
+    Object.keys(meta).forEach(function (id) {
+      if (typeof meta[id] === "string" && DATA_IMAGE.test(meta[id])) previews[id] = meta[id];
+    });
+  }
+
   function onResult(result) {
     var data = payloadOf(result);
     if (!data) return;
+    takeInlinePreviews(result);
     if (result.isError || data.error) {
       var err = data.error || {};
       showNote(String(err.message || "The request failed.") + (err.hint ? " " + String(err.hint) : ""), true);
@@ -164,7 +185,7 @@
     if (reset) { pollDelay = 2000; if (!pollStarted) pollStarted = Date.now(); }
     clearTimeout(pollTimer);
     loadPreviews();
-    if (stopped || !unfinished().length) { $("refresh").hidden = !stopped || !unfinished().length; return; }
+    if (stopped || !unfinished().length) { showRefresh(); return; }
     if (Date.now() - pollStarted > MAX_POLL_MS) { stop(); return; }
     pollTimer = setTimeout(poll, pollDelay + Math.floor(Math.random() * 400));
   }
@@ -188,14 +209,24 @@
       .catch(function () { busy = false; stop(); });
   }
 
+  function missingPreviews() { return Object.keys(failed).length > 0; }
+
+  function showRefresh() {
+    $("refresh").hidden = !((stopped && unfinished().length) || missingPreviews());
+    reportSize();
+  }
+
   function stop() {
     stopped = true;
     clearTimeout(pollTimer);
-    $("refresh").hidden = !unfinished().length;
+    showRefresh();
   }
 
   $("refresh").addEventListener("click", function () {
-    stopped = false; pollStarted = Date.now(); $("refresh").hidden = true; pollDelay = 2000; poll();
+    $("refresh").hidden = true;
+    failed = {};
+    loadPreviews();
+    if (unfinished().length) { stopped = false; pollStarted = Date.now(); pollDelay = 2000; poll(); }
   });
   document.addEventListener("visibilitychange", function () { if (!document.hidden && !stopped) schedule(false); });
 
@@ -205,7 +236,7 @@
     order.forEach(function (id) {
       (jobs[id].results || []).forEach(function (media) {
         if (media && media.kind === "image" && typeof media.media_id === "string" &&
-            !previews[media.media_id] && !wanted[media.media_id]) need.push(media.media_id);
+            !previews[media.media_id] && !wanted[media.media_id] && !failed[media.media_id]) need.push(media.media_id);
       });
     });
     need = need.slice(0, 8);
@@ -219,10 +250,15 @@
             previews[item.media_id] = item.data_url;
           }
         });
+        need.forEach(function (id) { if (!previews[id]) failed[id] = true; });
         render();
         loadPreviews();
       })
-      .catch(function () { /* previews are optional: the tiles still show status and file names */ });
+      .catch(function () {
+        // Previews are optional: the tiles still show status and size. Let the button retry.
+        need.forEach(function (id) { delete wanted[id]; failed[id] = true; });
+        showRefresh();
+      });
   }
 
   // ---- rendering ----------------------------------------------------------------------------
@@ -239,6 +275,15 @@
     note.className = bad ? "note bad" : "note";
     note.hidden = false;
     reportSize();
+  }
+
+  // Says why a finished image shows no picture, so a viewer that blocks or strips previews is
+  // visible instead of looking like a stuck job.
+  function whyNoPreview(media) {
+    if (media.kind !== "image") return "";
+    if (blocked[media.media_id]) return " · preview blocked by this viewer";
+    if (failed[media.media_id]) return " · no preview received";
+    return "";
   }
 
   function describe(media) {
@@ -258,15 +303,18 @@
       var media = (job.results || [])[0];
       var tile = el("div", "tile");
       var frame = el("div", "frame");
-      var source = media && previews[media.media_id];
+      var source = media && !blocked[media.media_id] && previews[media.media_id];
       if (source) {
         var img = document.createElement("img");
         img.alt = "Generated " + String(media.kind || "image");
+        img.addEventListener("error", (function (id) {
+          return function () { blocked[id] = true; render(); };
+        })(media.media_id));
         img.src = source;
         frame.className = "frame has-image";
         frame.appendChild(img);
       } else if (media) {
-        frame.textContent = describe(media);
+        frame.textContent = describe(media) + whyNoPreview(media);
       } else if (job.error) {
         frame.textContent = String(job.error.message || job.error.code || "failed").slice(0, 200);
       } else {

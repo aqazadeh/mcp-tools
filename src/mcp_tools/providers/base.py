@@ -58,6 +58,9 @@ class PollResult:
     error_code: str | None = None
     error_message: str | None = None
     retry_after: float | None = None
+    # What the provider reports it used (tokens, its own cost figure), kept on the job so
+    # catalog prices can be checked against real bills.
+    usage: JsonDict | None = None
 
 
 @dataclass(frozen=True)

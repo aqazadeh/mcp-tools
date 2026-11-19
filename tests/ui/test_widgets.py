@@ -15,6 +15,7 @@ from mcp.shared.exceptions import MCPError
 
 from mcp_tools.config import Settings
 from mcp_tools.server.build import LEGACY_UI_META_KEY, build_server
+from mcp_tools.server.ui.previews import META_KEY
 from mcp_tools.server.ui.resources import RESULTS, WIDGETS
 from tests.conftest import payload
 
@@ -74,6 +75,27 @@ async def test_ui_tools_point_at_a_readable_resource(settings: Settings) -> None
         assert item["data_url"].startswith("data:image/jpeg;base64,") and len(item["data_url"]) < 60_000
 
 
+async def test_widget_results_carry_previews_in_meta(settings: Settings) -> None:
+    """Hosts that render the widget but do not forward its own tool calls still get previews."""
+    built = build_server(settings)
+    async with apps_client(built.mcp) as c:
+        result = await c.call_tool("generate_image", {"params": {**IMG, "count": 2}, "wait_seconds": 10})
+        done = payload(result)
+        ids = [job["results"][0]["media_id"] for job in done["jobs"]]
+        inline = (result.meta or {})[META_KEY]
+        assert set(inline) == set(ids)
+        assert all(url.startswith("data:image/jpeg;base64,") and len(url) < 60_000 for url in inline.values())
+        assert META_KEY not in json.dumps(done)  # the model-facing payload stays small
+
+        shown = await c.call_tool("show_jobs", {"job_ids": [j["job_id"] for j in done["jobs"]]})
+        assert set((shown.meta or {})[META_KEY]) == set(ids)
+        history = await c.call_tool("show_generations", {})
+        assert set(ids) <= set((history.meta or {})[META_KEY])
+
+        queued = await c.call_tool("generate_image", {"params": IMG})  # not finished yet: nothing to preview
+        assert not (queued.meta or {}).get(META_KEY)
+
+
 async def test_clients_without_apps_do_not_get_widget_helpers(settings: Settings) -> None:
     built = build_server(settings)
     async with Client(built.mcp, raise_exceptions=True) as c:
@@ -83,6 +105,7 @@ async def test_clients_without_apps_do_not_get_widget_helpers(settings: Settings
             await c.call_tool("media_previews", {"media_ids": ["med_" + "0" * 26]})
         plain = payload(await c.call_tool("generate_image", {"params": IMG, "wait_seconds": 10}))
         assert plain["display"] == "none" and plain["jobs"][0]["results"]  # complete without any widget
+        assert META_KEY not in ((await c.call_tool("show_generations", {})).meta or {})  # nobody would see them
 
 
 async def test_ui_can_be_switched_off(tmp_path: Path) -> None:

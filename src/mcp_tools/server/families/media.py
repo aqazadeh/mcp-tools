@@ -12,6 +12,7 @@ from mcp_tools.core.pagination import page_request
 from mcp_tools.server.envelope import ok, platform_of
 from mcp_tools.server.params import NextStep, Wire, choice, optional_choice
 from mcp_tools.server.registry import ToolDef
+from mcp_tools.server.ui.previews import preview_data_urls
 
 KINDS = ("image", "video", "audio")
 
@@ -214,12 +215,12 @@ async def media_previews(
     if not media_ids or len(media_ids) > MAX_PREVIEWS:
         raise ApiError(INVALID_PARAMS, f"pass 1 to {MAX_PREVIEWS} media ids", hint="Ask in smaller groups.")
     rows = await platform.media.get_many([str(m) for m in media_ids], principal=platform.principal)
+    urls = await preview_data_urls(platform, [row.id for row in rows])
     items: list[dict[str, Any]] = []
     for row in rows:
         item: dict[str, Any] = {"media_id": row.id, "kind": row.kind}
-        data = await platform.media.preview(row, max_side=320, max_bytes=36_000) if row.status == "ready" else None
-        if data is not None:
-            item["data_url"] = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
+        if urls.get(row.id):
+            item["data_url"] = urls[row.id]
         items.append(item)
     return ok(PreviewsResult(items=items))
 

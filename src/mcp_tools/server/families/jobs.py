@@ -11,6 +11,7 @@ from mcp_tools.core.pagination import page_request
 from mcp_tools.server.envelope import ok, platform_of
 from mcp_tools.server.params import NextStep, Wire, choice, optional_choice
 from mcp_tools.server.registry import ToolDef
+from mcp_tools.server.ui.previews import inline_previews
 from mcp_tools.server.ui.resources import RESULTS
 
 
@@ -96,12 +97,14 @@ async def show_jobs(
         raise ApiError(INVALID_PARAMS, f"pass 1 to {MAX_SHOW_JOBS} job ids", hint="Show larger sets in groups.")
     views = await platform.jobs.get([str(j) for j in job_ids], principal=platform.principal)
     all_terminal = all(v.terminal for v in views)
+    jobs = [v.to_dict() for v in views]
     return ok(
         JobsResult(
-            jobs=[v.to_dict() for v in views],
+            jobs=jobs,
             all_terminal=all_terminal,
             next=None if all_terminal else NextStep(tool="jobs_wait", hint="Wait for the unfinished jobs."),
-        )
+        ),
+        meta=await inline_previews(platform, ctx, jobs),
     )
 
 
@@ -123,10 +126,10 @@ async def show_generations(
         only_completed=only_completed,
         folder_id=folder_id or None,
     )
+    items = [view.to_dict() for view in page.items]
     return ok(
-        GenerationsResult(
-            items=[view.to_dict() for view in page.items], has_more=page.has_more, next_cursor=page.next_cursor
-        )
+        GenerationsResult(items=items, has_more=page.has_more, next_cursor=page.next_cursor),
+        meta=await inline_previews(platform, ctx, items),
     )
 
 

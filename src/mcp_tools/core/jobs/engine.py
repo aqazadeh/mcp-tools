@@ -662,18 +662,22 @@ class Engine:
                 conn, blob, principal=principal, source="job_output", job_id=row["id"], output_index=0
             )
 
+        values: dict[str, Any] = {
+            "status": "completed",
+            "progress": 1.0,
+            "finished_at": self._clock.now_ms(),
+            "lease_owner": None,
+            "lease_expires_at": None,
+        }
+        if result.usage:
+            values["remote_state_json"] = {**state, "usage": result.usage}
+            logger.info("job %s (%s): provider usage %s", row["id"], row["model_id"], result.usage)
         completed = False
         try:
             completed = await self._transition(
                 row,
                 expect=("submitting", "running"),
-                values={
-                    "status": "completed",
-                    "progress": 1.0,
-                    "finished_at": self._clock.now_ms(),
-                    "lease_owner": None,
-                    "lease_expires_at": None,
-                },
+                values=values,
                 extra=register,
             )
         finally:

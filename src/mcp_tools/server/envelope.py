@@ -36,8 +36,14 @@ def _compact(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
-def ok(data: BaseModel, *, content: Sequence[ContentBlock] = ()) -> CallToolResult:
-    """Build a success result: compact JSON text without nulls plus structured content."""
+def ok(
+    data: BaseModel, *, content: Sequence[ContentBlock] = (), meta: Mapping[str, Any] | None = None
+) -> CallToolResult:
+    """Build a success result: compact JSON text without nulls plus structured content.
+
+    `meta` goes to `_meta`, which hosts pass to a widget but not to the model. It counts
+    toward the size budget; if it would not fit, it is dropped rather than failing the call.
+    """
     payload = data.model_dump(mode="json", exclude_none=True)
     text = _compact(payload)
     extra = sum(len(getattr(block, "data", "") or "") + len(getattr(block, "text", "") or "") for block in content)
@@ -49,7 +55,13 @@ def ok(data: BaseModel, *, content: Sequence[ContentBlock] = ()) -> CallToolResu
                 hint="Request fewer items (lower limit) or fewer previews per call.",
             )
         )
-    return CallToolResult(content=[TextContent(type="text", text=text), *content], structured_content=payload)
+    if meta and len(text.encode()) + extra + len(_compact(meta).encode()) > MAX_RESULT_BYTES:
+        meta = None
+    return CallToolResult(
+        content=[TextContent(type="text", text=text), *content],
+        structured_content=payload,
+        meta=dict(meta) if meta else None,
+    )
 
 
 def fail(err: ApiError) -> CallToolResult:

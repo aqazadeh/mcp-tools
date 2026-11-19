@@ -57,6 +57,7 @@ class JobView:
     created_at: int | None = None
     prompt: str | None = None
     next_poll_at: int | None = None
+    provider_usage: dict[str, Any] | None = None
 
     @property
     def terminal(self) -> bool:
@@ -64,7 +65,7 @@ class JobView:
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"job_id": self.job_id, "status": self.status}
-        for name in ("model", "output_type", "prompt", "progress", "credits", "error"):
+        for name in ("model", "output_type", "prompt", "progress", "credits", "provider_usage", "error"):
             value = getattr(self, name)
             if value is not None:
                 out[name] = value
@@ -103,4 +104,14 @@ def job_view(row: Any, results: list[MediaView]) -> JobView:
         created_at=row["created_at"],
         prompt=_brief_prompt(row["params_json"]),
         next_poll_at=row["next_poll_at"],
+        provider_usage=_usage(row),
     )
+
+
+def _usage(row: Any) -> dict[str, Any] | None:
+    try:
+        state = row["remote_state_json"]
+    except (KeyError, IndexError):
+        return None
+    usage = state.get("usage") if isinstance(state, dict) else None
+    return usage if isinstance(usage, dict) and row["status"] == "completed" else None
