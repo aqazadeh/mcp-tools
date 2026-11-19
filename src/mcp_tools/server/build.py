@@ -19,6 +19,7 @@ from mcp.server.apps import Apps
 
 from mcp_tools import __version__
 from mcp_tools.config import Settings
+from mcp_tools.core.logsafe import RedactingFilter
 from mcp_tools.core.platform import Platform
 from mcp_tools.server.envelope import guard
 from mcp_tools.server.instructions import build_instructions
@@ -44,6 +45,7 @@ def configure_logging(level: str) -> None:
     if not any(getattr(h, "_mcp_tools", False) for h in root.handlers):
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler.addFilter(RedactingFilter())
         handler._mcp_tools = True  # type: ignore[attr-defined]
         root.addHandler(handler)
     root.setLevel(level.upper())

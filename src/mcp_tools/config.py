@@ -36,6 +36,15 @@ class Settings(BaseSettings):
     )
     log_level: str = Field(default="INFO")
 
+    # Budget (estimates; 1 credit = 0.001 USD). These are the hard limits: nothing a tool
+    # caller passes can raise them.
+    initial_credits: int = Field(default=10_000, ge=0, description="Opening balance of a new data directory.")
+    daily_cap_credits: int = Field(default=10_000, ge=0, description="Hard cap on credits spent per UTC day.")
+    max_credits_per_call: int = Field(default=5_000, ge=0, description="Hard ceiling for one tool call.")
+    auto_approve_credits: int = Field(
+        default=500, ge=0, description="Calls estimated above this need an explicit max_credits."
+    )
+
     @property
     def resolved_data_dir(self) -> Path:
         return self.data_dir.expanduser().resolve()
