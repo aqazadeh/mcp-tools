@@ -36,10 +36,13 @@ from mcp_tools.core.media.paths import validate_roots
 from mcp_tools.core.media.service import MediaService
 from mcp_tools.core.principal import LOCAL, Principal
 from mcp_tools.core.projects.service import ProjectService
+from mcp_tools.core.secrets import load_secrets
 from mcp_tools.db.store import Store
 from mcp_tools.providers.base import Provider
 from mcp_tools.providers.mock import MockProvider
+from mcp_tools.providers.openai import OpenAIProvider
 from mcp_tools.providers.registry import ProviderRegistry
+from mcp_tools.providers.replicate import ReplicateProvider
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +98,16 @@ class Platform:
     def _default_providers(self) -> list[Provider]:
         delay = self.settings.mock_delay_ms
         delays = {"image": delay, "video": delay, "audio": delay} if delay is not None else None
-        return [MockProvider(self.clock, delays_ms=delays)]
+        keys = load_secrets(self.settings.data_dir)
+        return [
+            MockProvider(self.clock, delays_ms=delays),
+            ReplicateProvider(keys.get("REPLICATE_API_TOKEN"), self.fetcher),
+            OpenAIProvider(
+                keys.get("OPENAI_API_KEY"),
+                organization=keys.get("OPENAI_ORG_ID"),
+                project=keys.get("OPENAI_PROJECT_ID"),
+            ),
+        ]
 
     @asynccontextmanager
     async def running(self) -> AsyncIterator["Platform"]:

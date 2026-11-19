@@ -10,7 +10,7 @@ from mcp.server.mcpserver import Context
 from mcp_types import CallToolResult
 from pydantic import Field
 
-from mcp_tools.core.errors import PROVIDER_UNAVAILABLE, ApiError
+from mcp_tools.core.errors import INVALID_PARAMS, PROVIDER_UNAVAILABLE, ApiError
 from mcp_tools.core.platform import Platform
 from mcp_tools.server.envelope import platform_of
 from mcp_tools.server.families.generate import IDEMPOTENCY, MAX_CREDITS, SPEND, WAIT, GenerateResult, run_generation
@@ -25,7 +25,7 @@ def _model_for(platform: Platform, task: Any, wanted: str) -> str:
     """The model to use for a task: the one asked for, else the first whose provider is usable."""
     if wanted:
         return wanted
-    candidates = platform.catalog.by_task(task)
+    candidates = sorted(platform.catalog.by_task(task), key=lambda m: m.provider == "mock")  # placeholders last
     for model in candidates:
         if platform.providers.availability(model.provider).available:
             return model.id
@@ -46,11 +46,17 @@ async def upscale_image(
     wait_seconds: Annotated[int, WAIT] = 0,
 ) -> Annotated[CallToolResult, GenerateResult]:
     require_choice("scale", str(scale), ("2", "4"))
-    params = {
-        "model": _model_for(platform_of(ctx), "upscale", model),
-        "scale": scale,
-        "medias": [{"role": "image", "value": image_id}],
-    }
+    platform = platform_of(ctx)
+    model_id = _model_for(platform, "upscale", model)
+    params: dict[str, Any] = {"model": model_id, "medias": [{"role": "image", "value": image_id}]}
+    if any(p.name == "scale" for p in platform.catalog.get(model_id).parameters):
+        params["scale"] = scale
+    elif scale != 2:
+        raise ApiError(
+            INVALID_PARAMS,
+            f"model {model_id} enlarges by a fixed factor and takes no scale",
+            hint="Omit scale, or pass another upscale model.",
+        )
     return await run_generation(
         ctx,
         tool="upscale_image",

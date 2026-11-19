@@ -27,11 +27,13 @@ async def test_tool_is_listed_with_schema_annotations_and_visibility(client: Cli
 async def test_list_search_get_recommend(client: Client) -> None:
     listed = payload(await client.call_tool("models_explore", {"action": "list", "type": "image"}))
     assert listed["kind"] == "models" and listed["has_more"] is False
-    assert [m["id"] for m in listed["items"]] == ["mock_image"]  # transforms are not generation models
-    assert listed["items"][0]["available"] is True
+    ids = [m["id"] for m in listed["items"]]
+    assert ids[0] == "mock_image" and {"gpt_image_2", "flux_schnell"} <= set(ids)  # usable models come first
+    assert "mock_upscale" not in ids and "recraft_crisp_upscale" not in ids  # transforms are not generation models
+    assert [m["available"] for m in listed["items"]] == [True] + [False] * (len(ids) - 1)  # no provider keys here
 
     found = payload(await client.call_tool("models_explore", {"action": "search", "query": "upscale"}))
-    assert [m["id"] for m in found["items"]] == ["mock_upscale"]
+    assert found["items"][0]["id"] == "mock_upscale"
 
     detail = payload(await client.call_tool("models_explore", {"action": "get", "model_id": "mock_video"}))["model"]
     assert {p["name"] for p in detail["parameters"]} == {"duration", "resolution", "simulate"}
@@ -53,7 +55,13 @@ async def test_pagination_cursor_round_trip(client: Client) -> None:
     assert len(first["items"]) == 2 and first["has_more"] is True
     second = payload(await client.call_tool("models_explore", {"limit": 2, "cursor": first["next_cursor"]}))
     assert not {m["id"] for m in first["items"]} & {m["id"] for m in second["items"]}
-    assert "next_cursor" not in second
+    seen, page = len(first["items"]) + len(second["items"]), second
+    while page.get("has_more"):
+        page = payload(await client.call_tool("models_explore", {"limit": 2, "cursor": page["next_cursor"]}))
+        seen += len(page["items"])
+    assert "next_cursor" not in page and seen == len(
+        payload(await client.call_tool("models_explore", {"limit": 50}))["items"]
+    )
 
 
 async def test_errors_use_the_json_contract(client: Client) -> None:

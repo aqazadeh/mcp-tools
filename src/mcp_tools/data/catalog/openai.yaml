@@ -1,0 +1,156 @@
+# OpenAI models, called directly over REST. Needs OPENAI_API_KEY.
+# Model ids and fields follow the official client's type definitions. Prices are estimates
+# for budgeting (1 credit = 0.001 USD); the provider's bill is authoritative.
+# verified_at stays null until a model has been run once with a real key.
+provider: openai
+provider_name: OpenAI
+
+models:
+  - id: gpt_image_2
+    name: GPT Image 2
+    provider_ref: gpt-image-2
+    execution: sync
+    description: >-
+      Strong prompt following and readable text in images; can also edit or combine up to 16
+      reference images. Good default for illustrations, product shots and anything with lettering.
+    output_type: image
+    aspect_ratios: ["1:1", "3:2", "2:3"]
+    tags: [image, text rendering, editing, references, openai]
+    use_cases: [illustration, product photo, poster, logo, image editing]
+    deadline_seconds: 300
+    parameters:
+      - name: quality
+        type: string
+        description: Rendering effort; higher costs more and takes longer.
+        default: medium
+        options: [low, medium, high]
+      - name: background
+        type: string
+        description: transparent needs output_format png or webp.
+        options: [transparent, opaque, auto]
+      - name: output_format
+        type: string
+        default: png
+        options: [png, webp, jpeg]
+    medias:
+      - role: image
+        kinds: [image]
+        max: 16
+        description: Reference images to edit or combine (switches the call to image editing).
+    pricing:
+      unit: per_output
+      credits: 45
+      multipliers:
+        quality: { low: 0.3, medium: 1, high: 4 }
+
+  - id: gpt_image_1_mini
+    name: GPT Image 1 Mini
+    provider_ref: gpt-image-1-mini
+    execution: sync
+    description: Cheaper, faster image model for drafts and simple pictures.
+    output_type: image
+    aspect_ratios: ["1:1", "3:2", "2:3"]
+    tags: [image, cheap, fast, draft, openai]
+    use_cases: [draft, thumbnail, quick idea]
+    deadline_seconds: 300
+    parameters:
+      - name: quality
+        type: string
+        default: medium
+        options: [low, medium, high]
+      - name: output_format
+        type: string
+        default: png
+        options: [png, webp, jpeg]
+    medias:
+      - role: image
+        kinds: [image]
+        max: 16
+        description: Reference images to edit or combine.
+    pricing:
+      unit: per_output
+      credits: 12
+      multipliers:
+        quality: { low: 0.5, medium: 1, high: 3 }
+
+  - id: gpt_4o_mini_tts
+    name: GPT-4o mini TTS
+    provider_ref: gpt-4o-mini-tts
+    execution: sync
+    description: Text to speech. The prompt is the text to speak (up to 4096 characters); `instructions` steers tone.
+    output_type: audio
+    tags: [audio, speech, tts, voice, narration, openai]
+    use_cases: [voice-over, narration, read aloud]
+    deadline_seconds: 300
+    parameters:
+      - name: voice
+        type: string
+        default: alloy
+        options: [alloy, ash, ballad, coral, echo, sage, shimmer, verse, marin, cedar, fable, onyx, nova]
+      - name: instructions
+        type: string
+        description: How to speak, e.g. "calm and warm, slow pace".
+      - name: response_format
+        type: string
+        default: mp3
+        options: [mp3, wav, flac]
+      - name: speed
+        type: number
+        default: 1.0
+        min: 0.25
+        max: 4.0
+    pricing:
+      unit: per_1k_chars
+      credits: 15
+
+  - id: sora_2
+    name: Sora 2
+    provider_ref: sora-2
+    execution: async
+    description: Video with synchronised sound from a prompt, optionally starting from one image. 4, 8 or 12 seconds.
+    output_type: video
+    aspect_ratios: ["16:9", "9:16"]
+    tags: [video, sound, cinematic, image to video, openai]
+    use_cases: [short clip, social video, animate an image]
+    deadline_seconds: 1800
+    parameters:
+      - name: duration
+        type: integer
+        description: Clip length in seconds.
+        default: 4
+        options: [4, 8, 12]
+        provider_key: seconds
+    medias:
+      - role: start_image
+        kinds: [image]
+        max: 1
+        description: Optional first frame; should match the output size.
+    pricing:
+      unit: per_second
+      credits: 100
+
+  - id: sora_2_pro
+    name: Sora 2 Pro
+    provider_ref: sora-2-pro
+    execution: async
+    description: Higher-fidelity Sora 2. Slower and about three times the price; use for final renders.
+    output_type: video
+    aspect_ratios: ["16:9", "9:16"]
+    tags: [video, sound, cinematic, high quality, openai]
+    use_cases: [final render, hero shot]
+    deadline_seconds: 3600
+    parameters:
+      - name: duration
+        type: integer
+        description: Clip length in seconds.
+        default: 4
+        options: [4, 8, 12]
+        provider_key: seconds
+    medias:
+      - role: start_image
+        kinds: [image]
+        max: 1
+        description: Optional first frame; should match the output size.
+    pricing:
+      unit: per_second
+      credits: 300

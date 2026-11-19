@@ -1,0 +1,151 @@
+# Models hosted on Replicate, called through its predictions API. Needs REPLICATE_API_TOKEN.
+# provider_ref is "owner/name" (official models) or "owner/name:version".
+# Slugs and input names were written from memory of the public model pages, not read from the
+# API: every entry has verified_at null. Run `mcp-tools doctor --live` with a token to compare
+# each entry with the model's published input schema before relying on it.
+# Prices are estimates for budgeting (1 credit = 0.001 USD).
+provider: replicate
+provider_name: Replicate
+execution: async
+output_hosts: [replicate.delivery]
+
+models:
+  - id: flux_schnell
+    name: FLUX.1 schnell
+    provider_ref: black-forest-labs/flux-schnell
+    provider_name: Black Forest Labs
+    description: Very fast, very cheap images in a few steps. Best for drafts and exploring ideas.
+    output_type: image
+    aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"]
+    tags: [image, fast, cheap, draft, flux]
+    use_cases: [draft, concept, quick idea]
+    deadline_seconds: 300
+    parameters:
+      - name: output_format
+        type: string
+        default: png
+        options: [png, jpg, webp]
+      - name: seed
+        type: integer
+        min: 0
+        max: 2147483647
+    pricing:
+      unit: per_output
+      credits: 3
+
+  - id: flux_1_1_pro
+    name: FLUX 1.1 pro
+    provider_ref: black-forest-labs/flux-1.1-pro
+    provider_name: Black Forest Labs
+    description: High-quality photorealistic and stylised images with good prompt adherence.
+    output_type: image
+    aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+    tags: [image, photorealistic, high quality, flux]
+    use_cases: [photo, key visual, product photo]
+    deadline_seconds: 300
+    parameters:
+      - name: output_format
+        type: string
+        default: png
+        options: [png, jpg, webp]
+      - name: seed
+        type: integer
+        min: 0
+        max: 2147483647
+    pricing:
+      unit: per_output
+      credits: 40
+
+  - id: flux_kontext_pro
+    name: FLUX.1 Kontext pro
+    provider_ref: black-forest-labs/flux-kontext-pro
+    provider_name: Black Forest Labs
+    description: Edit one image with a text instruction while keeping the subject and layout.
+    output_type: image
+    aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
+    tags: [image, editing, image to image, flux]
+    use_cases: [image editing, restyle, change background]
+    deadline_seconds: 300
+    parameters:
+      - name: output_format
+        type: string
+        default: png
+        options: [png, jpg]
+      - name: seed
+        type: integer
+        min: 0
+        max: 2147483647
+    medias:
+      - role: image
+        kinds: [image]
+        max: 1
+        required: true
+        provider_field: input_image
+        description: The image to edit.
+    pricing:
+      unit: per_output
+      credits: 40
+
+  - id: minimax_video_01
+    name: MiniMax Video-01
+    provider_ref: minimax/video-01
+    provider_name: MiniMax
+    description: Six-second 720p clips from a prompt, optionally starting from one image.
+    output_type: video
+    tags: [video, image to video, minimax]
+    use_cases: [short clip, animate an image]
+    deadline_seconds: 1200
+    parameters:
+      - name: prompt_optimizer
+        type: boolean
+        description: Let the model rewrite the prompt.
+        default: true
+    medias:
+      - role: start_image
+        kinds: [image]
+        max: 1
+        provider_field: first_frame_image
+        description: Optional first frame.
+    pricing:
+      unit: per_output
+      credits: 500
+
+  - id: recraft_crisp_upscale
+    name: Recraft Crisp Upscale
+    provider_ref: recraft-ai/recraft-crisp-upscale
+    provider_name: Recraft
+    description: Enlarges an image and sharpens detail.
+    output_type: image
+    task: upscale
+    prompt: none
+    tags: [upscale, enhance]
+    deadline_seconds: 300
+    medias:
+      - role: image
+        kinds: [image]
+        max: 1
+        required: true
+        description: The image to enlarge.
+    pricing:
+      unit: per_output
+      credits: 6
+
+  - id: bria_remove_background
+    name: Bria Remove Background
+    provider_ref: bria/remove-background
+    provider_name: Bria
+    description: Cuts the subject out and returns it on a transparent background.
+    output_type: image
+    task: remove_background
+    prompt: none
+    tags: [background removal, cutout]
+    deadline_seconds: 300
+    medias:
+      - role: image
+        kinds: [image]
+        max: 1
+        required: true
+        description: The image to cut out.
+    pricing:
+      unit: per_output
+      credits: 18

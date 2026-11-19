@@ -82,6 +82,10 @@ class Catalog:
         self._availability: AvailabilityFn = availability or (lambda _provider: Availability(True))
 
     # -- lookups ---------------------------------------------------------------------------
+    def all(self) -> list[ModelSpec]:
+        """Every model, hidden ones included (for operator tooling)."""
+        return list(self._models.values())
+
     def __len__(self) -> int:
         return len(self._models)
 
@@ -199,9 +203,10 @@ class Catalog:
         ranked = []
         for model in candidates:
             _, score = self._score(model, words)
-            ranked.append((score + (2 if self.availability(model).available else 0), model))
-        ranked.sort(key=lambda pair: (-pair[0], pair[1].id))
-        return [m for _, m in ranked[:limit]]
+            # A model the server cannot run is no recommendation, and a placeholder is the last resort.
+            ranked.append((not self.availability(model).available, model.provider == "mock", -score, model.id, model))
+        ranked.sort(key=lambda entry: entry[:4])
+        return [entry[4] for entry in ranked[:limit]]
 
     def by_task(self, task: Task) -> list[ModelSpec]:
         return self._filtered(type=None, input=None, task=task)
