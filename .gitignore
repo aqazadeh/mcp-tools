@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+# Local runtime data and secrets (never commit)
+.env
+.env.*
+!.env.example
+.mcp-tools/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Widget harness (dev-only)
+node_modules/
+tests/widget_harness/.build/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

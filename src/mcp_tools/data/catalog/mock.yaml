@@ -1,0 +1,144 @@
+# Keyless mock provider: produces real, small media files locally.
+# Use it to try the server without any API key and in tests.
+provider: mock
+provider_name: Mock
+execution: async
+
+models:
+  - id: mock_image
+    name: Mock Image
+    description: Instant placeholder images rendered locally. Free of provider cost; use to test a flow end to end.
+    output_type: image
+    aspect_ratios: ["1:1", "16:9", "9:16", "4:3", "3:4"]
+    tags: [mock, test, placeholder, fast]
+    use_cases: [testing, dry run, demo]
+    parameters:
+      - name: resolution
+        type: string
+        description: Output size tier.
+        default: 1k
+        options: [1k, 2k]
+      - name: style
+        type: string
+        description: Placeholder pattern.
+        default: gradient
+        options: [gradient, checker, noise]
+      - name: seed
+        type: integer
+        description: Makes the placeholder reproducible.
+        min: 0
+        max: 2147483647
+      - name: simulate
+        type: string
+        description: Force an outcome to test error handling.
+        default: success
+        options: [success, fail, moderated, slow]
+    medias:
+      - role: image
+        kinds: [image]
+        max: 4
+        description: Optional reference images (their sizes are echoed into the placeholder).
+    pricing:
+      unit: per_output
+      credits: 10
+      multipliers:
+        resolution: { "1k": 1, "2k": 2 }
+
+  - id: mock_video
+    name: Mock Video
+    description: Short placeholder clips. Free of provider cost; use to test video flows.
+    output_type: video
+    aspect_ratios: ["16:9", "9:16", "1:1"]
+    tags: [mock, test, placeholder]
+    use_cases: [testing, dry run, demo]
+    parameters:
+      - name: duration
+        type: integer
+        description: Clip length in seconds.
+        default: 4
+        min: 2
+        max: 10
+      - name: resolution
+        type: string
+        default: 480p
+        options: [480p, 720p]
+      - name: simulate
+        type: string
+        description: Force an outcome to test error handling.
+        default: success
+        options: [success, fail, moderated, slow]
+    medias:
+      - role: start_image
+        kinds: [image]
+        max: 1
+        description: Optional first frame.
+    pricing:
+      unit: per_second
+      credits: 20
+      multipliers:
+        resolution: { "480p": 1, "720p": 2 }
+
+  - id: mock_audio
+    name: Mock Audio
+    description: Placeholder tones standing in for speech or music. Free of provider cost.
+    output_type: audio
+    tags: [mock, test, placeholder, speech, music]
+    use_cases: [testing, dry run, demo]
+    parameters:
+      - name: duration
+        type: number
+        description: Length in seconds.
+        default: 3
+        min: 1
+        max: 30
+      - name: voice
+        type: string
+        default: alto
+        options: [alto, tenor]
+      - name: simulate
+        type: string
+        description: Force an outcome to test error handling.
+        default: success
+        options: [success, fail, moderated, slow]
+    pricing:
+      unit: per_second
+      credits: 2
+
+  - id: mock_upscale
+    name: Mock Upscale
+    description: Enlarges an image locally with plain resampling.
+    output_type: image
+    task: upscale
+    prompt: none
+    tags: [mock, upscale]
+    parameters:
+      - name: scale
+        type: integer
+        default: 2
+        options: [2, 4]
+    medias:
+      - role: image
+        kinds: [image]
+        max: 1
+        required: true
+    pricing:
+      unit: per_output
+      credits: 5
+      multipliers:
+        scale: { "2": 1, "4": 2 }
+
+  - id: mock_remove_background
+    name: Mock Background Removal
+    description: Makes near-white pixels transparent. A stand-in for a real matting model.
+    output_type: image
+    task: remove_background
+    prompt: none
+    tags: [mock, background]
+    medias:
+      - role: image
+        kinds: [image]
+        max: 1
+        required: true
+    pricing:
+      unit: per_output
+      credits: 5
