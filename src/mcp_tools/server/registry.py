@@ -33,6 +33,7 @@ FAMILY_MODULES: dict[str, str] = {
     "media": "mcp_tools.server.families.media",
     "billing": "mcp_tools.server.families.billing",
     "transforms": "mcp_tools.server.families.transforms",
+    "projects": "mcp_tools.server.families.projects",
 }
 
 

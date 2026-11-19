@@ -32,6 +32,11 @@ _FAMILY_NOTES: dict[str, str] = {
         "media_import_path where offered) and use the returned media_id. To look at an image yourself, call "
         "media_get with include_preview."
     ),
+    "projects": (
+        "Organising: projects hold folders; pass a folder id as params.folder_id to generate into it, or use "
+        "assets_attach afterwards. Deleting a project or folder never deletes jobs or files, but still ask the "
+        "user before any delete or remove call."
+    ),
     "billing": "Budget: balance shows credits and the server's limits, which tools cannot change.",
 }
 

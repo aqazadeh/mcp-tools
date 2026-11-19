@@ -26,6 +26,7 @@ from mcp_tools.core.jobs.views import JobView, MediaView, job_view, media_view
 from mcp_tools.core.media.service import MediaRow, MediaService
 from mcp_tools.core.pagination import Page, PageRequest, encode_cursor
 from mcp_tools.core.principal import Principal
+from mcp_tools.core.projects.service import ProjectService
 from mcp_tools.db.schema import ACTIVE_JOB_STATUSES, jobs
 from mcp_tools.db.store import Store
 from mcp_tools.providers.registry import ProviderRegistry
@@ -106,6 +107,7 @@ class JobService:
         catalog: Catalog,
         providers: ProviderRegistry,
         media: MediaService,
+        projects: ProjectService,
         ledger: Ledger,
         idempotency: IdempotencyStore,
         runner: Runner,
@@ -120,6 +122,7 @@ class JobService:
         self._catalog = catalog
         self._providers = providers
         self._media = media
+        self._projects = projects
         self._ledger = ledger
         self._idempotency = idempotency
         self._runner = runner
@@ -213,6 +216,8 @@ class JobService:
         self._providers.get(model.provider)  # raises provider_unavailable
         request = normalize_request(model, raw)
         medias = await self._resolve_medias(model, request, principal)
+        if request.folder_id:
+            await self._projects.require_folder(request.folder_id, principal)
         return _Prepared(index=item.index, model=model, request=request, quote=quote(model, request), medias=medias)
 
     async def _prepare_all(
@@ -347,6 +352,12 @@ class JobService:
             position = 0
             for p in prepared:
                 canonical = p.canonical()
+                # Re-checked inside the transaction: the folder may have been deleted since the read.
+                folder = (
+                    await self._projects.folder_row(conn, p.request.folder_id, principal)
+                    if p.request.folder_id
+                    else None
+                )
                 for _ in range(p.request.count):
                     job_id = new_id("job", now)
                     await conn.execute(
@@ -375,6 +386,8 @@ class JobService:
                     await self._ledger.spend(
                         conn, principal.workspace_id, p.quote.per_job, Ref("job", job_id), note=p.model.id
                     )
+                    if folder is not None:
+                        await self._projects.place(conn, folder, "job", job_id, now)
                     created.append({"index": p.index, "job_id": job_id})
                     position += 1
             balance = (await self._ledger.balance(conn, principal.workspace_id)).balance

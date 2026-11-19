@@ -279,9 +279,9 @@ async def test_local_import_is_not_offered_without_the_capability(settings: Sett
 async def test_surface_budget_and_cross_references(client: Client, built: Built) -> None:
     listed = (await client.list_tools()).tools
     names = {t.name for t in listed}
-    assert len(listed) == 18
+    assert len(listed) == 30
     size = sum(len(t.model_dump_json(exclude_none=True)) for t in listed)
-    assert size < 40_000, size
+    assert size < 80_000, size  # about 1.7 KB per tool, output schemas included
     instructions = built.mcp.instructions or ""
     prefixes = "generate|jobs|job|media|models|show|estimate"
     mentioned = set(re.findall(rf"\b(?:{prefixes})_[a-z_]+\b", instructions)) - {

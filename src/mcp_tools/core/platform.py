@@ -35,6 +35,7 @@ from mcp_tools.core.media.importer import MediaImporter
 from mcp_tools.core.media.paths import validate_roots
 from mcp_tools.core.media.service import MediaService
 from mcp_tools.core.principal import LOCAL, Principal
+from mcp_tools.core.projects.service import ProjectService
 from mcp_tools.db.store import Store
 from mcp_tools.providers.base import Provider
 from mcp_tools.providers.mock import MockProvider
@@ -83,6 +84,7 @@ class Platform:
         self.blobs: LocalBlobStore
         self.media: MediaService
         self.importer: MediaImporter
+        self.projects: ProjectService
         self.signal: ChangeSignal
         self.engine: Engine
         self.runner: Runner
@@ -148,6 +150,7 @@ class Platform:
 
         await self.store.write(bootstrap)
 
+        self.projects = ProjectService(self.store, self.clock, self.idempotency)
         self.signal = ChangeSignal()
         self.engine = Engine(
             store=self.store,
@@ -170,6 +173,7 @@ class Platform:
             catalog=self.catalog,
             providers=self.providers,
             media=self.media,
+            projects=self.projects,
             ledger=self.ledger,
             idempotency=self.idempotency,
             runner=self.runner,
