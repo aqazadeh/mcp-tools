@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from mcp_tools.blobs.base import NullIssuer, UrlIssuer
 from mcp_tools.blobs.local import LocalBlobStore
 from mcp_tools.config import Settings
+from mcp_tools.core.appreg.builtin import image_tools, storyboard
+from mcp_tools.core.appreg.registry import AppRegistry
 from mcp_tools.core.billing.idempotency import IdempotencyStore
 from mcp_tools.core.billing.ledger import Ledger
 from mcp_tools.core.catalog.loader import Catalog, load_catalog
@@ -90,6 +92,7 @@ class Platform:
         self.media: MediaService
         self.importer: MediaImporter
         self.projects: ProjectService
+        self.apps: AppRegistry
         self.signal: ChangeSignal
         self.engine: Engine
         self.runner: Runner
@@ -165,6 +168,7 @@ class Platform:
         await self.store.write(bootstrap)
 
         self.projects = ProjectService(self.store, self.clock, self.idempotency)
+        self.apps = AppRegistry([image_tools.APP, storyboard.APP], store=self.store, clock=self.clock)
         self.signal = ChangeSignal()
         self.engine = Engine(
             store=self.store,

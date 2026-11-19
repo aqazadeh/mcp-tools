@@ -41,6 +41,10 @@ _FAMILY_NOTES: dict[str, str] = {
         "Multi-step work: before a multi-shot video, a product photo set or similar, call "
         "workflow_instructions (no arguments lists them) and follow the workflow that fits."
     ),
+    "appreg": (
+        "More capabilities: when no tool fits (resizing or cropping an image, a contact sheet, a storyboard "
+        "run), look in apps_search, read the action with apps_describe, then run it with apps_invoke."
+    ),
     "billing": "Budget: balance shows credits and the server's limits, which tools cannot change.",
 }
 
