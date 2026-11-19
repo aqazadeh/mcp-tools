@@ -36,6 +36,7 @@ from mcp_tools.core.media.fetch import Egress, SafeFetcher, detect_egress
 from mcp_tools.core.media.importer import MediaImporter
 from mcp_tools.core.media.paths import validate_roots
 from mcp_tools.core.media.service import MediaService
+from mcp_tools.core.preferences import PreferenceService
 from mcp_tools.core.principal import LOCAL, Principal
 from mcp_tools.core.projects.service import ProjectService
 from mcp_tools.core.secrets import load_secrets
@@ -93,6 +94,7 @@ class Platform:
         self.importer: MediaImporter
         self.projects: ProjectService
         self.apps: AppRegistry
+        self.preferences: PreferenceService
         self.signal: ChangeSignal
         self.engine: Engine
         self.runner: Runner
@@ -168,6 +170,7 @@ class Platform:
         await self.store.write(bootstrap)
 
         self.projects = ProjectService(self.store, self.clock, self.idempotency)
+        self.preferences = PreferenceService(self.store, self.catalog, self.projects)
         self.apps = AppRegistry([image_tools.APP, storyboard.APP], store=self.store, clock=self.clock)
         self.signal = ChangeSignal()
         self.engine = Engine(

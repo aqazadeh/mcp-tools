@@ -8,6 +8,7 @@ from pydantic import Field
 
 from mcp_tools.core.catalog.pricing import CREDIT_USD
 from mcp_tools.core.pagination import page_request
+from mcp_tools.core.preferences import KEYS as PREFERENCE_KEYS
 from mcp_tools.server.envelope import ok, platform_of
 from mcp_tools.server.params import Wire, choice, optional_choice
 from mcp_tools.server.registry import ToolDef
@@ -79,6 +80,41 @@ async def transactions(
     return ok(TransactionsResult(items=items, has_more=page.has_more, next_cursor=page.next_cursor))
 
 
+class PreferencesResult(Wire):
+    kind: Literal["preferences"] = "preferences"
+    schema_version: int = 1
+    preferences: dict[str, Any]
+    available_keys: list[str]
+    message: str | None = None
+
+
+async def preferences_get(ctx: Context) -> Annotated[CallToolResult, PreferencesResult]:
+    platform = platform_of(ctx)
+    values = await platform.preferences.get(principal=platform.principal)
+    return ok(
+        PreferencesResult(
+            preferences=values,
+            available_keys=list(PREFERENCE_KEYS),
+            message="Apply these as defaults when the user has not said otherwise." if values else None,
+        )
+    )
+
+
+async def preferences_update(
+    ctx: Context,
+    patch: Annotated[
+        dict[str, Any],
+        Field(
+            description="Keys to set; null clears a key. Keys: default_image_model, default_video_model, "
+            "default_audio_model, default_aspect_ratio, default_folder_id, style_notes."
+        ),
+    ],
+) -> Annotated[CallToolResult, PreferencesResult]:
+    platform = platform_of(ctx)
+    values = await platform.preferences.update(patch, principal=platform.principal)
+    return ok(PreferencesResult(preferences=values, available_keys=list(PREFERENCE_KEYS)))
+
+
 def tools() -> list[ToolDef]:
     return [
         ToolDef(
@@ -105,5 +141,32 @@ def tools() -> list[ToolDef]:
                 "job_id. Use it to explain where credits went or to confirm a refund."
             ),
             annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        ),
+        ToolDef(
+            name="preferences_get",
+            family="billing",
+            handler=preferences_get,
+            title="Get preferences",
+            description=(
+                "Read the user's saved defaults: preferred image / video / audio model, aspect ratio, "
+                "destination folder and style notes. Read-only. Call it once before creative work and use "
+                "the values wherever the user has not said otherwise."
+            ),
+            annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
+        ),
+        ToolDef(
+            name="preferences_update",
+            family="billing",
+            handler=preferences_update,
+            title="Update preferences",
+            description=(
+                "Save or clear the user's defaults. Use it only when the user states a lasting preference "
+                '("always use 9:16", "put everything in this project"), not for a one-off choice. Only the '
+                "listed keys exist; spending limits are server settings and cannot be changed here."
+            ),
+            annotations=ToolAnnotations(
+                read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+            ),
+            effects=frozenset({"write"}),
         ),
     ]

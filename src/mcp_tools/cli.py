@@ -144,6 +144,49 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return anyio.run(run)
 
 
+def _cmd_worker(args: argparse.Namespace) -> int:
+    """Process jobs without serving a client: keeps long jobs moving when no MCP client is connected."""
+    import signal
+
+    import anyio
+
+    from mcp_tools.core.platform import Platform
+    from mcp_tools.server.build import configure_logging
+
+    async def run() -> int:
+        settings = Settings()
+        configure_logging(settings.log_level)
+        platform = Platform(settings)
+        async with platform.running():
+            print("mcp-tools worker: processing jobs (Ctrl+C to stop)", file=sys.stderr)
+            with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as signals:
+                async for _ in signals:
+                    break
+        return 0
+
+    return anyio.run(run)
+
+
+def _cmd_gc(args: argparse.Namespace) -> int:
+    import anyio
+
+    from mcp_tools.core.maintenance import collect_garbage
+    from mcp_tools.core.platform import Platform
+
+    async def run() -> int:
+        platform = Platform(Settings(log_level="WARNING"), run_jobs=False)
+        async with platform.running():
+            report = await collect_garbage(
+                platform, media_older_than_days=args.media_older_than_days, dry_run=args.dry_run
+            )
+        prefix = "would remove" if args.dry_run else "removed"
+        for name, count in report.items():
+            print(f"{prefix} {count} {name.replace('_', ' ')}")
+        return 0
+
+    return anyio.run(run)
+
+
 def _provider_fields(model: Any) -> set[str]:
     """The provider-side input names a catalog entry would send."""
     renamed = model.common_map
@@ -190,6 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Check the installation and show what is configured.")
     doctor.add_argument("--live", action="store_true", help="Also ask each configured provider about its models.")
     doctor.set_defaults(func=_cmd_doctor)
+
+    sub.add_parser("worker", help="Process jobs in the background without serving a client.").set_defaults(
+        func=_cmd_worker
+    )
+
+    gc = sub.add_parser("gc", help="Remove expired uploads, stale keys and files nothing refers to.")
+    gc.add_argument("--media-older-than-days", type=int, default=0, help="Also delete media older than this (0: keep).")
+    gc.add_argument("--dry-run", action="store_true", help="Only report what would be removed.")
+    gc.set_defaults(func=_cmd_gc)
 
     key = sub.add_parser("key", help="Manage the HTTP API key.")
     key_sub = key.add_subparsers(dest="key_command", required=True)
