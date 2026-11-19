@@ -37,6 +37,10 @@ _FAMILY_NOTES: dict[str, str] = {
         "assets_attach afterwards. Deleting a project or folder never deletes jobs or files, but still ask the "
         "user before any delete or remove call."
     ),
+    "workflows": (
+        "Multi-step work: before a multi-shot video, a product photo set or similar, call "
+        "workflow_instructions (no arguments lists them) and follow the workflow that fits."
+    ),
     "billing": "Budget: balance shows credits and the server's limits, which tools cannot change.",
 }
 

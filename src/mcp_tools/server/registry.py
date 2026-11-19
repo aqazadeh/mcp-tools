@@ -34,6 +34,7 @@ FAMILY_MODULES: dict[str, str] = {
     "billing": "mcp_tools.server.families.billing",
     "transforms": "mcp_tools.server.families.transforms",
     "projects": "mcp_tools.server.families.projects",
+    "workflows": "mcp_tools.server.families.workflows",
 }
 
 

@@ -37,6 +37,7 @@ from mcp_tools.core.media.service import MediaService
 from mcp_tools.core.principal import LOCAL, Principal
 from mcp_tools.core.projects.service import ProjectService
 from mcp_tools.core.secrets import load_secrets
+from mcp_tools.core.workflows.loader import Workflow, load_workflows
 from mcp_tools.db.store import Store
 from mcp_tools.providers.base import Provider
 from mcp_tools.providers.mock import MockProvider
@@ -76,6 +77,7 @@ class Platform:
         self.fetcher = fetcher or SafeFetcher(egress=_egress(settings.egress))
         self.providers = ProviderRegistry(providers if providers is not None else self._default_providers())
         self.catalog: Catalog = load_catalog(settings.catalog_paths, availability=self.providers.availability)
+        self.workflows: dict[str, Workflow] = load_workflows(settings.workflow_paths)
         self.ledger = Ledger(self.clock, daily_cap=settings.daily_cap_credits)
         self.idempotency = IdempotencyStore(self.clock)
         self._refs = 0

@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     families: str = Field(default="", description="Comma-separated tool families to enable; empty enables all.")
     ui_enabled: bool = Field(default=True, description="Bind UI widgets (MCP Apps) to the tools that have one.")
     catalog_dirs: str = Field(default="", description=f"Extra catalog directories, separated by {os.pathsep!r}.")
+    workflow_dirs: str = Field(
+        default="",
+        description=f"Folders with your own workflow bundles, separated by {os.pathsep!r}. Each must belong to "
+        "you and not be writable by others; their workflows appear as user/<name>.",
+    )
     log_level: str = Field(default="INFO")
 
     job_concurrency: int = Field(default=4, ge=1, le=32, description="Jobs advanced in parallel.")
@@ -79,6 +84,10 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"unknown tool families: {unknown}; known: {list(ALL_FAMILIES)}")
         return tuple(name for name in ALL_FAMILIES if name in names)
+
+    @property
+    def workflow_paths(self) -> tuple[Path, ...]:
+        return tuple(Path(p).expanduser() for p in self.workflow_dirs.split(os.pathsep) if p.strip())
 
     @property
     def import_root_paths(self) -> tuple[Path, ...]:
