@@ -57,23 +57,25 @@ def approval_message(outcome: Outcome) -> str:
     )
 
 
-async def _generate(
+async def run_generation(
     ctx: Context,
     *,
     tool: str,
     output_type: str,
-    params: GenerateParams,
+    params: GenerateParams | dict[str, Any],
     max_credits: int | None,
     idempotency_key: str,
     wait_seconds: int,
     context: str,
+    task: str = "generate",
 ) -> CallToolResult:
     platform = platform_of(ctx)
     outcome = await platform.jobs.create(
-        [GenerationRequest(index=0, params=params.raw())],
+        [GenerationRequest(index=0, params=params.raw() if isinstance(params, GenerateParams) else params)],
         principal=platform.principal,
         tool=tool,
         output_type=output_type,
+        task=task,
         max_credits=max_credits,
         idempotency_key=idempotency_key or None,
         client_context=context[:500] or None,
@@ -134,28 +136,28 @@ async def _generate(
 
 
 _PARAMS = Field(description="Request for one model. Model-specific parameters go next to the common fields.")
-_MAX_CREDITS = Field(
+MAX_CREDITS = Field(
     description="Most this call may spend, in credits. Needed when the estimate exceeds the server's auto-approve "
     "amount; it can never raise the server's own limits."
 )
-_IDEMPOTENCY = Field(
+IDEMPOTENCY = Field(
     description="Optional. Reuse the same key when retrying this same request after a timeout to avoid a "
     "duplicate; never reuse it for a different request.",
     max_length=128,
 )
-_WAIT = Field(description="Wait up to this many seconds (0-12) for results before returning.")
+WAIT = Field(description="Wait up to this many seconds (0-12) for results before returning.")
 _CONTEXT = Field(description="One short sentence on the user's goal. For server logs only.", max_length=500)
 
 
 async def generate_image(
     ctx: Context,
     params: Annotated[GenerateParams, _PARAMS],
-    max_credits: Annotated[int | None, _MAX_CREDITS] = None,
-    idempotency_key: Annotated[str, _IDEMPOTENCY] = "",
-    wait_seconds: Annotated[int, _WAIT] = 0,
+    max_credits: Annotated[int | None, MAX_CREDITS] = None,
+    idempotency_key: Annotated[str, IDEMPOTENCY] = "",
+    wait_seconds: Annotated[int, WAIT] = 0,
     context: Annotated[str, _CONTEXT] = "",
 ) -> Annotated[CallToolResult, GenerateResult]:
-    return await _generate(
+    return await run_generation(
         ctx,
         tool="generate_image",
         output_type="image",
@@ -170,12 +172,12 @@ async def generate_image(
 async def generate_video(
     ctx: Context,
     params: Annotated[GenerateParams, _PARAMS],
-    max_credits: Annotated[int | None, _MAX_CREDITS] = None,
-    idempotency_key: Annotated[str, _IDEMPOTENCY] = "",
-    wait_seconds: Annotated[int, _WAIT] = 0,
+    max_credits: Annotated[int | None, MAX_CREDITS] = None,
+    idempotency_key: Annotated[str, IDEMPOTENCY] = "",
+    wait_seconds: Annotated[int, WAIT] = 0,
     context: Annotated[str, _CONTEXT] = "",
 ) -> Annotated[CallToolResult, GenerateResult]:
-    return await _generate(
+    return await run_generation(
         ctx,
         tool="generate_video",
         output_type="video",
@@ -190,12 +192,12 @@ async def generate_video(
 async def generate_audio(
     ctx: Context,
     params: Annotated[GenerateParams, _PARAMS],
-    max_credits: Annotated[int | None, _MAX_CREDITS] = None,
-    idempotency_key: Annotated[str, _IDEMPOTENCY] = "",
-    wait_seconds: Annotated[int, _WAIT] = 0,
+    max_credits: Annotated[int | None, MAX_CREDITS] = None,
+    idempotency_key: Annotated[str, IDEMPOTENCY] = "",
+    wait_seconds: Annotated[int, WAIT] = 0,
     context: Annotated[str, _CONTEXT] = "",
 ) -> Annotated[CallToolResult, GenerateResult]:
-    return await _generate(
+    return await run_generation(
         ctx,
         tool="generate_audio",
         output_type="audio",
@@ -303,8 +305,8 @@ _REQUESTS = Field(description="1-12 independent requests; each has `params` like
 async def generate_batch(
     ctx: Context,
     requests: Annotated[list[BatchRequest], _REQUESTS],
-    max_credits: Annotated[int | None, _MAX_CREDITS] = None,
-    idempotency_key: Annotated[str, _IDEMPOTENCY] = "",
+    max_credits: Annotated[int | None, MAX_CREDITS] = None,
+    idempotency_key: Annotated[str, IDEMPOTENCY] = "",
     context: Annotated[str, _CONTEXT] = "",
 ) -> Annotated[CallToolResult, BatchResult]:
     platform = platform_of(ctx)
@@ -391,7 +393,7 @@ async def estimate_cost(
     )
 
 
-_SPEND = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
+SPEND = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
 _READ = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
 
 _COMMON = (
@@ -409,7 +411,7 @@ def _generate_def(name: str, handler: Any, title: str, lead: str) -> ToolDef:
         handler=handler,
         title=title,
         description=lead + " " + _COMMON,
-        annotations=_SPEND,
+        annotations=SPEND,
         effects=frozenset({"spend", "network"}),
     )
 
@@ -447,7 +449,7 @@ def tools() -> list[ToolDef]:
                 "result item echoes your `index`. For variants of one prompt use `count` on a generate tool "
                 "instead. Retry with the same idempotency_key after a timeout. Next: jobs_wait with job_ids."
             ),
-            annotations=_SPEND,
+            annotations=SPEND,
             effects=frozenset({"spend", "network"}),
         ),
         ToolDef(

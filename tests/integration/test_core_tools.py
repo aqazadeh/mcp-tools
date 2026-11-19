@@ -279,7 +279,7 @@ async def test_local_import_is_not_offered_without_the_capability(settings: Sett
 async def test_surface_budget_and_cross_references(client: Client, built: Built) -> None:
     listed = (await client.list_tools()).tools
     names = {t.name for t in listed}
-    assert len(listed) == 16
+    assert len(listed) == 18
     size = sum(len(t.model_dump_json(exclude_none=True)) for t in listed)
     assert size < 40_000, size
     instructions = built.mcp.instructions or ""
@@ -299,3 +299,24 @@ async def test_surface_budget_and_cross_references(client: Client, built: Built)
             "media_ids",
         }
         assert referenced <= names, (tool.name, referenced - names)
+
+
+async def test_transforms_take_one_image_and_nothing_else(client: Client, built: Built) -> None:
+    source = await _call(client, "generate_image", {"params": IMG, "wait_seconds": 10})
+    job_id = source["jobs"][0]["job_id"]
+    width = source["jobs"][0]["results"][0]["width"]
+
+    bigger = await _call(client, "upscale_image", {"image_id": job_id, "scale": 4, "wait_seconds": 10})
+    assert bigger["jobs"][0]["status"] == "completed" and bigger["credits"]["charged"] == 10
+    assert bigger["jobs"][0]["results"][0]["width"] == width * 4
+
+    cutout = await _call(client, "remove_background", {"image_id": job_id, "wait_seconds": 10})
+    assert cutout["jobs"][0]["results"][0]["mime"] == "image/png"
+
+    assert error_of(await client.call_tool("upscale_image", {"image_id": job_id, "scale": 3}))["allowed"] == ["2", "4"]
+    assert error_of(await client.call_tool("upscale_image", {"image_id": "med_nope"}))["code"] == "invalid_params"
+    assert error_of(await client.call_tool("upscale_image", {"image_id": job_id, "prompt": "x"}))["code"] == (
+        "unknown_argument"
+    )
+    wrong = error_of(await client.call_tool("upscale_image", {"image_id": job_id, "model": "mock_image"}))
+    assert wrong["code"] == "invalid_params"
