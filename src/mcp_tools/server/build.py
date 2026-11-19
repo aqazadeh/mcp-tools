@@ -23,7 +23,9 @@ from mcp_tools.core.logsafe import RedactingFilter
 from mcp_tools.core.platform import Platform
 from mcp_tools.server.envelope import guard
 from mcp_tools.server.instructions import build_instructions
-from mcp_tools.server.registry import Capabilities, ToolDef, collect, validate_defs
+from mcp_tools.server.registry import Capabilities, RegistryError, ToolDef, collect, validate_defs
+from mcp_tools.server.ui.resources import WIDGETS
+from mcp_tools.server.visibility import AppsVisibility
 
 SERVER_NAME = "mcp-tools"
 LEGACY_UI_META_KEY = "ui/resourceUri"  # older hosts read the flat key; the SDK writes only the nested one
@@ -85,6 +87,14 @@ def build_server(
 
     apps = Apps()
     ui_defs = [d for d in defs if d.ui_uri is not None and caps.ui]
+    for uri in sorted({d.ui_uri for d in ui_defs if d.ui_uri}):
+        widget = WIDGETS.get(uri)
+        if widget is None:
+            raise RegistryError(f"no widget is registered for {uri}")
+        # No CSP domains: the widgets load nothing from the network (previews arrive as data: URLs).
+        apps.add_html_resource(
+            uri, widget.html, name=widget.name, title=widget.title, description=widget.description, prefers_border=False
+        )
     for d in ui_defs:
         apps.tool(
             resource_uri=d.ui_uri,  # type: ignore[arg-type]
@@ -103,6 +113,7 @@ def build_server(
         version=__version__,
         instructions=build_instructions(families),
         extensions=[apps],
+        middleware=[AppsVisibility(d.name for d in defs if d.visibility == ("app",))],
         lifespan=lifespan,
         log_level=settings.log_level.upper(),  # type: ignore[arg-type]
     )

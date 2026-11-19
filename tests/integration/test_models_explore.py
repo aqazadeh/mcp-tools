@@ -21,7 +21,7 @@ async def test_tool_is_listed_with_schema_annotations_and_visibility(client: Cli
     assert tool.output_schema is not None
     assert len(tool.description or "") <= MAX_DESCRIPTION_CHARS
     assert "models_explore" in (client.instructions or "")
-    assert {d.name for d in built.tools} == set(tools)
+    assert {d.name for d in built.tools if d.visibility != ("app",)} == set(tools)  # widget helpers are hidden
 
 
 async def test_list_search_get_recommend(client: Client) -> None:

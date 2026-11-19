@@ -3,6 +3,7 @@
 import logging
 from typing import Annotated, Any, Literal
 
+from mcp.server.apps import client_supports_apps
 from mcp.server.mcpserver import Context
 from mcp_types import CallToolResult, ToolAnnotations
 from pydantic import Field, ValidationError
@@ -12,8 +13,17 @@ from mcp_tools.core.jobs.service import MAX_BATCH, GenerationRequest, Outcome
 from mcp_tools.server.envelope import ok, platform_of
 from mcp_tools.server.params import GenerateParams, NextStep, Wire
 from mcp_tools.server.registry import ToolDef
+from mcp_tools.server.ui.resources import RESULTS
 
 logger = logging.getLogger(__name__)
+
+
+def shows_widget(ctx: Context) -> bool:
+    """True when the client renders this tool's widget, i.e. the user already sees the results."""
+    try:
+        return platform_of(ctx).settings.ui_enabled and client_supports_apps(ctx)
+    except Exception:
+        return False
 
 
 class JobRef(Wire):
@@ -124,6 +134,7 @@ async def run_generation(
         GenerateResult(
             status="submitted",
             jobs=refs,
+            display="widget" if shows_widget(ctx) else "none",
             credits=Credits(charged=0 if outcome.replayed else outcome.credits_total, balance=outcome.balance),
             adjustments=adjustments or None,
             replayed=True if outcome.replayed else None,
@@ -413,6 +424,7 @@ def _generate_def(name: str, handler: Any, title: str, lead: str) -> ToolDef:
         description=lead + " " + _COMMON,
         annotations=SPEND,
         effects=frozenset({"spend", "network"}),
+        ui_uri=RESULTS.uri,
     )
 
 

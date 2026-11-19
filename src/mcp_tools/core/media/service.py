@@ -461,12 +461,15 @@ class MediaService:
     def local_path(self, row: MediaRow) -> Path | None:
         return self._blobs.local_path(row.blob_key) if row.blob_key else None
 
-    async def preview(self, row: MediaRow) -> bytes | None:
+    async def preview(
+        self, row: MediaRow, *, max_side: int | None = None, max_bytes: int | None = None
+    ) -> bytes | None:
         """A small JPEG of an image; None for kinds we cannot preview."""
         path = self.local_path(row)
         if row.kind != "image" or path is None:
             return None
+        options = {k: v for k, v in (("max_side", max_side), ("max_bytes", max_bytes)) if v is not None}
         try:
-            return await anyio.to_thread.run_sync(probing.make_preview, path)
+            return await anyio.to_thread.run_sync(lambda: probing.make_preview(path, **options))
         except probing.ProbeError:
             return None

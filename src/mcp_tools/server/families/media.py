@@ -193,6 +193,33 @@ async def media_confirm(
     )
 
 
+MAX_PREVIEWS = 8
+
+
+class PreviewsResult(Wire):
+    kind: Literal["media_previews"] = "media_previews"
+    schema_version: int = 1
+    items: list[dict[str, Any]]
+
+
+async def media_previews(
+    ctx: Context,
+    media_ids: Annotated[list[str], Field(description="1-8 media ids.")],
+) -> Annotated[CallToolResult, PreviewsResult]:
+    platform = platform_of(ctx)
+    if not media_ids or len(media_ids) > MAX_PREVIEWS:
+        raise ApiError(INVALID_PARAMS, f"pass 1 to {MAX_PREVIEWS} media ids", hint="Ask in smaller groups.")
+    rows = await platform.media.get_many([str(m) for m in media_ids], principal=platform.principal)
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item: dict[str, Any] = {"media_id": row.id, "kind": row.kind}
+        data = await platform.media.preview(row, max_side=320, max_bytes=36_000) if row.status == "ready" else None
+        if data is not None:
+            item["data_url"] = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
+        items.append(item)
+    return ok(PreviewsResult(items=items))
+
+
 _READ = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
 
 
@@ -276,6 +303,17 @@ def tools() -> list[ToolDef]:
             ),
             annotations=_READ,
             visibility=("model", "app"),
+        ),
+        ToolDef(
+            name="media_previews",
+            family="media",
+            handler=media_previews,
+            title="Media previews",
+            description="Small image previews for the results viewer. Not for the model: use media_get instead.",
+            annotations=_READ,
+            visibility=("app",),
+            app_helper=True,
+            requires=frozenset({"ui"}),
         ),
         ToolDef(
             name="media_list",

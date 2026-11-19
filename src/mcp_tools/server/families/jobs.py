@@ -11,6 +11,7 @@ from mcp_tools.core.pagination import page_request
 from mcp_tools.server.envelope import ok, platform_of
 from mcp_tools.server.params import NextStep, Wire, choice, optional_choice
 from mcp_tools.server.registry import ToolDef
+from mcp_tools.server.ui.resources import RESULTS
 
 
 class JobsResult(Wire):
@@ -166,6 +167,7 @@ def tools() -> list[ToolDef]:
             name="show_jobs",
             family="jobs",
             handler=show_jobs,
+            ui_uri=RESULTS.uri,
             title="Show jobs",
             description=(
                 "Show the current status and results of up to 60 jobs by id, without waiting. Read-only. Use it "
@@ -178,6 +180,7 @@ def tools() -> list[ToolDef]:
             name="show_generations",
             family="jobs",
             handler=show_generations,
+            ui_uri=RESULTS.uri,
             title="Show generations",
             description=(
                 "List past generation jobs, newest first, with their results. Read-only. Filter by output type "

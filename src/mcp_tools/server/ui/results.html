@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Results</title>
+<style>
+  :root { color-scheme: light dark; --bg: #ffffff; --fg: #1c1c1e; --muted: #6b6b73; --line: #e3e3e8;
+          --tile: #f4f4f7; --accent: #3b5bdb; --bad: #c92a2a; --ok: #2b8a3e; }
+  :root[data-theme="dark"] { --bg: #1b1b1f; --fg: #ececf1; --muted: #9a9aa5; --line: #34343c;
+          --tile: #26262c; --accent: #8da2fb; --bad: #ff8787; --ok: #69db7c; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #1b1b1f; --fg: #ececf1; --muted: #9a9aa5; --line: #34343c;
+          --tile: #26262c; --accent: #8da2fb; --bad: #ff8787; --ok: #69db7c; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .note { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; }
+  .note.bad { border-color: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--tile);
+          display: flex; flex-direction: column; min-width: 0; }
+  .frame { aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center;
+           color: var(--muted); font-size: 12px; text-align: center; padding: 8px;
+           overflow: hidden; overflow-wrap: anywhere; }
+  .frame img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; border-radius: 4px; }
+  .frame.has-image { padding: 0; }
+  .meta { padding: 6px 8px; border-top: 1px solid var(--line); background: var(--bg); font-size: 12px; min-width: 0; }
+  .meta div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .status { font-weight: 600; }
+  .status.completed { color: var(--ok); }
+  .status.failed, .status.moderated, .status.canceled, .status.not_found { color: var(--bad); }
+  .bar { height: 3px; background: var(--line); }
+  .bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  button { font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--bg); color: var(--fg); cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Results</h1>
+  <span id="summary" class="muted" aria-live="polite"></span>
+  <button id="refresh" type="button" hidden>Refresh</button>
+</header>
+<div id="note" class="note" hidden></div>
+<div id="grid" class="grid"></div>
+<script>
+(function () {
+  "use strict";
+  // Rendering rule for this file: DOM nodes are built with createElement and textContent only.
+  // Nothing from a tool result is ever parsed as HTML, and image sources are data: URLs only.
+  var PROTOCOL = "2026-01-26";
+  var TERMINAL = { completed: 1, failed: 1, canceled: 1, moderated: 1, not_found: 1 };
+  var DATA_IMAGE = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+  var MAX_POLL_MS = 15 * 60 * 1000;
+
+  var nextId = 1, pending = {}, jobs = {}, order = [], previews = {}, wanted = {};
+  var pollTimer = null, pollDelay = 2000, pollStarted = 0, stopped = false, busy = false;
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ---- JSON-RPC over postMessage ---------------------------------------------------------
+  function post(message) { window.parent.postMessage(message, "*"); }
+  function request(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = nextId++;
+      pending[id] = { resolve: resolve, reject: reject };
+      post({ jsonrpc: "2.0", id: id, method: method, params: params || {} });
+    });
+  }
+  function notify(method, params) { post({ jsonrpc: "2.0", method: method, params: params || {} }); }
+
+  window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
+    var msg = event.data;
+    if (!msg || typeof msg !== "object" || msg.jsonrpc !== "2.0") return;
+    if (typeof msg.method === "string") {
+      if (msg.id !== undefined && msg.id !== null) {            // a request from the host
+        if (msg.method === "ping" || msg.method === "ui/resource-teardown") {
+          if (msg.method === "ui/resource-teardown") stop();
+          post({ jsonrpc: "2.0", id: msg.id, result: {} });
+        } else {
+          post({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
+        }
+        return;
+      }
+      onNotification(msg.method, msg.params || {});
+      return;
+    }
+    var waiter = pending[msg.id];
+    if (!waiter) return;
+    delete pending[msg.id];
+    if (msg.error) waiter.reject(msg.error); else waiter.resolve(msg.result);
+  });
+
+  function onNotification(method, params) {
+    if (method === "ui/notifications/tool-result") onResult(params);
+    else if (method === "ui/notifications/tool-cancelled") showNote("The request was cancelled.", true);
+    else if (method === "ui/notifications/host-context-changed") applyContext(params);
+  }
+
+  function applyContext(context) {
+    if (context && (context.theme === "dark" || context.theme === "light")) {
+      document.documentElement.setAttribute("data-theme", context.theme);
+    }
+  }
+
+  // ---- reading tool results ---------------------------------------------------------------
+  function payloadOf(result) {
+    if (result && result.structuredContent && typeof result.structuredContent === "object") {
+      return result.structuredContent;
+    }
+    var blocks = (result && result.content) || [];
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i] && blocks[i].type === "text") {
+        try { return JSON.parse(blocks[i].text); } catch (e) { return null; }
+      }
+    }
+    return null;
+  }
+
+  function onResult(result) {
+    var data = payloadOf(result);
+    if (!data) return;
+    if (result.isError || data.error) {
+      var err = data.error || {};
+      showNote(String(err.message || "The request failed.") + (err.hint ? " " + String(err.hint) : ""), true);
+      return;
+    }
+    if (data.status === "approval_required" || data.status === "rejected") {
+      showNote(String(data.message || "Nothing was created."), data.status === "rejected");
+    }
+    var list = data.jobs || data.items || [];
+    if (data.kind === "batch") {
+      list = (data.job_ids || []).map(function (id) { return { job_id: id, status: "queued" }; });
+    }
+    list.forEach(function (job) { if (job && typeof job.job_id === "string") merge(job); });
+    render();
+    schedule(true);
+  }
+
+  function merge(job) {
+    if (!jobs[job.job_id]) order.push(job.job_id);
+    var known = jobs[job.job_id] || {};
+    jobs[job.job_id] = {
+      job_id: job.job_id,
+      status: String(job.status || known.status || "queued"),
+      progress: typeof job.progress === "number" ? job.progress : known.progress,
+      results: Array.isArray(job.results) ? job.results : (known.results || []),
+      error: job.error || known.error || null,
+      model: job.model || known.model || ""
+    };
+  }
+
+  // ---- polling (read-only tools; stops at the first refusal) -------------------------------
+  function unfinished() { return order.filter(function (id) { return !TERMINAL[jobs[id].status]; }); }
+
+  function schedule(reset) {
+    if (reset) { pollDelay = 2000; if (!pollStarted) pollStarted = Date.now(); }
+    clearTimeout(pollTimer);
+    loadPreviews();
+    if (stopped || !unfinished().length) { $("refresh").hidden = !stopped || !unfinished().length; return; }
+    if (Date.now() - pollStarted > MAX_POLL_MS) { stop(); return; }
+    pollTimer = setTimeout(poll, pollDelay + Math.floor(Math.random() * 400));
+  }
+
+  function poll() {
+    if (stopped || busy) return;
+    if (document.hidden) { pollTimer = setTimeout(poll, 3000); return; }
+    var ids = unfinished().slice(0, 12);
+    if (!ids.length) return;
+    busy = true;
+    request("tools/call", { name: "jobs_wait", arguments: { job_ids: ids, timeout_seconds: 0 } })
+      .then(function (result) {
+        busy = false;
+        var data = payloadOf(result);
+        if (!data || result.isError || !Array.isArray(data.jobs)) { stop(); return; }
+        data.jobs.forEach(merge);
+        render();
+        pollDelay = Math.min(15000, Math.round(pollDelay * 1.5));
+        schedule(false);
+      })
+      .catch(function () { busy = false; stop(); });
+  }
+
+  function stop() {
+    stopped = true;
+    clearTimeout(pollTimer);
+    $("refresh").hidden = !unfinished().length;
+  }
+
+  $("refresh").addEventListener("click", function () {
+    stopped = false; pollStarted = Date.now(); $("refresh").hidden = true; pollDelay = 2000; poll();
+  });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && !stopped) schedule(false); });
+
+  // ---- previews -----------------------------------------------------------------------------
+  function loadPreviews() {
+    var need = [];
+    order.forEach(function (id) {
+      (jobs[id].results || []).forEach(function (media) {
+        if (media && media.kind === "image" && typeof media.media_id === "string" &&
+            !previews[media.media_id] && !wanted[media.media_id]) need.push(media.media_id);
+      });
+    });
+    need = need.slice(0, 8);
+    if (!need.length) return;
+    need.forEach(function (id) { wanted[id] = true; });
+    request("tools/call", { name: "media_previews", arguments: { media_ids: need } })
+      .then(function (result) {
+        var data = payloadOf(result);
+        ((data && data.items) || []).forEach(function (item) {
+          if (item && typeof item.data_url === "string" && DATA_IMAGE.test(item.data_url)) {
+            previews[item.media_id] = item.data_url;
+          }
+        });
+        render();
+        loadPreviews();
+      })
+      .catch(function () { /* previews are optional: the tiles still show status and file names */ });
+  }
+
+  // ---- rendering ----------------------------------------------------------------------------
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function showNote(text, bad) {
+    var note = $("note");
+    note.textContent = text;
+    note.className = bad ? "note bad" : "note";
+    note.hidden = false;
+    reportSize();
+  }
+
+  function describe(media) {
+    var parts = [String(media.kind || "file")];
+    if (media.width && media.height) parts.push(media.width + "×" + media.height);
+    if (media.duration_s) parts.push(media.duration_s + " s");
+    return parts.join(" · ");
+  }
+
+  function render() {
+    var grid = $("grid");
+    while (grid.firstChild) grid.removeChild(grid.firstChild);
+    var done = 0;
+    order.forEach(function (id) {
+      var job = jobs[id];
+      if (job.status === "completed") done++;
+      var media = (job.results || [])[0];
+      var tile = el("div", "tile");
+      var frame = el("div", "frame");
+      var source = media && previews[media.media_id];
+      if (source) {
+        var img = document.createElement("img");
+        img.alt = "Generated " + String(media.kind || "image");
+        img.src = source;
+        frame.className = "frame has-image";
+        frame.appendChild(img);
+      } else if (media) {
+        frame.textContent = describe(media);
+      } else if (job.error) {
+        frame.textContent = String(job.error.message || job.error.code || "failed").slice(0, 200);
+      } else {
+        frame.textContent = job.status === "running" ? "Generating…" : "Waiting…";
+      }
+      tile.appendChild(frame);
+      if (!TERMINAL[job.status]) {
+        var bar = el("div", "bar"), fill = document.createElement("i");
+        fill.style.width = Math.round(Math.max(0.05, Math.min(1, job.progress || 0)) * 100) + "%";
+        bar.appendChild(fill);
+        tile.appendChild(bar);
+      }
+      var meta = el("div", "meta");
+      meta.appendChild(el("div", "status " + job.status.replace(/[^a-z_]/g, ""), job.status.replace(/_/g, " ")));
+      if (media) meta.appendChild(el("div", "muted", media.filename || media.media_id));
+      else if (job.model) meta.appendChild(el("div", "muted", job.model));
+      tile.appendChild(meta);
+      grid.appendChild(tile);
+    });
+    $("summary").textContent = order.length ? done + " of " + order.length + " ready" : "";
+    reportSize();
+  }
+
+  var lastHeight = 0;
+  function reportSize() {
+    var height = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    if (height && height !== lastHeight) {
+      lastHeight = height;
+      notify("ui/notifications/size-changed", { width: Math.ceil(document.documentElement.clientWidth), height: height });
+    }
+  }
+  if (typeof ResizeObserver === "function") new ResizeObserver(reportSize).observe(document.documentElement);
+
+  // ---- handshake (listeners above are attached before this runs) ------------------------------
+  // A host that attaches its listener late would miss the first message, so the handshake is
+  // repeated a few times until it is answered. Only the first answer is used.
+  var connected = false, attempts = 0;
+  function connect() {
+    if (connected) return;
+    if (attempts++ >= 5) { showNote("This viewer could not connect to the host.", true); return; }
+    request("ui/initialize", {
+      appInfo: { name: "mcp-tools results", version: "1" },
+      appCapabilities: {},
+      protocolVersion: PROTOCOL
+    }).then(function (result) {
+      if (connected) return;
+      connected = true;
+      applyContext(result && result.hostContext);
+      notify("ui/notifications/initialized", {});
+      reportSize();
+    }).catch(function () { /* answered with an error: the retry timer decides what happens next */ });
+    setTimeout(connect, 1500);
+  }
+  connect();
+})();
+</script>
+</body>
+</html>
