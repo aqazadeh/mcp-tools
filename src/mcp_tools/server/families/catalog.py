@@ -4,12 +4,12 @@ from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context
 from mcp_types import CallToolResult, ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from mcp_tools.core.errors import INVALID_PARAMS, ApiError
 from mcp_tools.core.pagination import page_request
 from mcp_tools.server.envelope import ok, platform_of
-from mcp_tools.server.params import choice, optional_choice, require_choice
+from mcp_tools.server.params import Wire, choice, optional_choice, require_choice
 from mcp_tools.server.registry import ToolDef
 
 ACTIONS = ("list", "search", "get", "recommend")
@@ -17,7 +17,7 @@ OUTPUT_TYPES = ("image", "video", "audio")
 INPUT_KINDS = ("text", "media")
 
 
-class ModelsExploreResult(BaseModel):
+class ModelsExploreResult(Wire):
     kind: Literal["models"] = "models"
     schema_version: int = 1
     action: str

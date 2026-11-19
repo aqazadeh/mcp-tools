@@ -17,6 +17,45 @@ from pydantic.fields import FieldInfo
 from mcp_tools.core.errors import INVALID_PARAMS, ApiError
 
 
+def _slim(node: Any) -> None:
+    """Shrink a published schema: drop titles and write optional fields without a null variant.
+
+    Results are sent without nulls, and tools/list is read by a model on every session, so the
+    `anyOf: [X, null]` + `default: null` + `title` that pydantic emits per field is pure overhead.
+    """
+    if isinstance(node, list):
+        for item in node:
+            _slim(item)
+        return
+    if not isinstance(node, dict):
+        return
+    if isinstance(node.get("title"), str):
+        del node["title"]
+    variants = node.get("anyOf")
+    if isinstance(variants, list) and len(variants) == 2 and node.get("default") is None:
+        rest = [v for v in variants if v != {"type": "null"}]
+        if len(rest) == 1 and isinstance(rest[0], dict):
+            del node["anyOf"]
+            node.pop("default", None)
+            node.update(rest[0])
+    for key, value in node.items():
+        if key in ("properties", "$defs") and isinstance(value, dict):
+            for child in value.values():
+                _slim(child)
+        else:
+            _slim(value)
+
+
+def _slim_schema(schema: dict[str, Any], _model: type[BaseModel]) -> None:
+    _slim(schema)
+
+
+class Wire(BaseModel):
+    """Base for models whose JSON Schema is published in tools/list."""
+
+    model_config = ConfigDict(json_schema_extra=_slim_schema)
+
+
 def choice(description: str, options: Sequence[str]) -> FieldInfo:
     """A string field whose allowed values appear in the schema as an enum."""
     return Field(description=description, json_schema_extra={"enum": list(options)})
@@ -47,10 +86,10 @@ def json_object(value: Any, *, name: str) -> dict[str, Any]:
     return value
 
 
-class MediaRef(BaseModel):
+class MediaRef(Wire):
     """A reference file for a generation."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_slim_schema)
 
     role: str = Field(
         default="",
@@ -59,10 +98,10 @@ class MediaRef(BaseModel):
     value: str = Field(description="A media id (med_...) or the job id (job_...) of a finished job. Never a URL.")
 
 
-class GenerateParams(BaseModel):
+class GenerateParams(Wire):
     """Common request fields. Model-specific parameters are passed alongside them."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", json_schema_extra=_slim_schema)
 
     model: str = Field(description="Model id from models_explore.")
     prompt: str = Field(default="", description="What to generate.")
@@ -85,7 +124,7 @@ class GenerateParams(BaseModel):
         return self.model_dump()
 
 
-class NextStep(BaseModel):
+class NextStep(Wire):
     tool: str
     after_seconds: int | None = None
     hint: str | None = None

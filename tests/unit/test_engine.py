@@ -251,18 +251,18 @@ async def test_a_job_queued_for_too_long_is_not_started(rig: Rig) -> None:
 
 async def test_cancel_before_start_is_immediate(rig: Rig) -> None:
     job = await rig.create()
-    view, refunded = await rig.platform.jobs.cancel(job, principal=rig.platform.principal)
+    view, refunded, _ = await rig.platform.jobs.cancel(job, principal=rig.platform.principal)
     assert (view.status, refunded) == ("canceled", 100)
     await rig.step(job)
     assert rig.provider.submits == [] and await rig.balance() == 1_000
-    again, refunded_again = await rig.platform.jobs.cancel(job, principal=rig.platform.principal)
+    again, refunded_again, _ = await rig.platform.jobs.cancel(job, principal=rig.platform.principal)
     assert (again.status, refunded_again) == ("canceled", 0)
 
 
 async def test_cancel_while_running_goes_through_the_provider(rig: Rig) -> None:
     job = await rig.create()
     await rig.step(job)
-    view, refunded = await rig.platform.jobs.cancel(job, principal=rig.platform.principal)
+    view, refunded, _ = await rig.platform.jobs.cancel(job, principal=rig.platform.principal)
     assert (view.status, refunded) == ("running", 0)  # requested; the runner finishes it
     await rig.step(job)
     assert await rig.status(job) == "canceled" and rig.provider.cancels == [f"remote-{job}"]

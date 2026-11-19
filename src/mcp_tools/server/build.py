@@ -71,7 +71,7 @@ def build_server(
 ) -> Built:
     settings = settings or Settings()
     configure_logging(settings.log_level)
-    caps = capabilities or Capabilities(ui=settings.ui_enabled)
+    caps = capabilities or Capabilities(ui=settings.ui_enabled, local_paths=settings.local_imports)
     platform = platform or Platform(settings)
 
     @asynccontextmanager

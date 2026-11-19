@@ -303,14 +303,14 @@ class MediaService:
         return out
 
     async def list(
-        self, page: PageRequest, *, principal: Principal, kind: str | None = None, source: str | None = None
+        self, page: PageRequest, *, principal: Principal, kind: str | None = None, generated: bool | None = None
     ) -> Page[MediaRow]:
         """Newest first, keyset-paginated on the (time-sortable) id."""
         query = select(media).where(media.c.workspace_id == principal.workspace_id, media.c.status == "ready")
         if kind:
             query = query.where(media.c.kind == kind)
-        if source:
-            query = query.where(media.c.source == source)
+        if generated is not None:
+            query = query.where(media.c.job_id.is_not(None) if generated else media.c.job_id.is_(None))
         before = (page.cursor or {}).get("before")
         if isinstance(before, str):
             query = query.where(media.c.id < before)

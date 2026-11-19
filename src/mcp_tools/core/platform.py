@@ -29,6 +29,9 @@ from mcp_tools.core.datadir import DataDir, prepare_data_dir
 from mcp_tools.core.jobs.engine import Engine, make_owner_id
 from mcp_tools.core.jobs.runner import ChangeSignal, Runner
 from mcp_tools.core.jobs.service import JobService
+from mcp_tools.core.media.fetch import Egress, SafeFetcher, detect_egress
+from mcp_tools.core.media.importer import MediaImporter
+from mcp_tools.core.media.paths import validate_roots
 from mcp_tools.core.media.service import MediaService
 from mcp_tools.core.principal import LOCAL, Principal
 from mcp_tools.db.store import Store
@@ -37,6 +40,14 @@ from mcp_tools.providers.mock import MockProvider
 from mcp_tools.providers.registry import ProviderRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _egress(value: str) -> Egress:
+    if value == "auto":
+        return detect_egress()
+    if value not in ("direct", "proxy", "off"):
+        raise ValueError(f"egress must be auto, direct, proxy or off, got {value!r}")
+    return value  # type: ignore[return-value]
 
 
 class Platform:
@@ -49,6 +60,7 @@ class Platform:
         urls: UrlIssuer | None = None,
         expose_local_paths: bool = True,
         run_jobs: bool = True,
+        fetcher: SafeFetcher | None = None,
     ) -> None:
         self.settings = settings
         self.clock: Clock = clock or SystemClock()
@@ -56,6 +68,7 @@ class Platform:
         self.urls: UrlIssuer = urls or NullIssuer()
         self.expose_local_paths = expose_local_paths
         self.run_jobs = run_jobs
+        self.fetcher = fetcher or SafeFetcher(egress=_egress(settings.egress))
         self.providers = ProviderRegistry(providers if providers is not None else self._default_providers())
         self.catalog: Catalog = load_catalog(settings.catalog_paths, availability=self.providers.availability)
         self.ledger = Ledger(self.clock, daily_cap=settings.daily_cap_credits)
@@ -68,6 +81,7 @@ class Platform:
         self.store: Store
         self.blobs: LocalBlobStore
         self.media: MediaService
+        self.importer: MediaImporter
         self.signal: ChangeSignal
         self.engine: Engine
         self.runner: Runner
@@ -111,6 +125,8 @@ class Platform:
         await self.store.open()
         self.blobs = LocalBlobStore(self.data.blobs)
         self.media = MediaService(self.store, self.blobs, self.clock)
+        roots = validate_roots([self.data.inbox, *self.settings.import_root_paths]) if self.expose_local_paths else ()
+        self.importer = MediaImporter(self.media, self.fetcher, roots=roots)
 
         async def bootstrap(conn: AsyncConnection) -> None:
             await self.ledger.ensure_account(

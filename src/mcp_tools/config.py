@@ -35,6 +35,18 @@ class Settings(BaseSettings):
         default=None, ge=0, description="Override how long mock jobs take (tests and demos)."
     )
 
+    local_imports: bool = Field(default=True, description="Offer media_import_path (reads allowed local folders).")
+    import_roots: str = Field(
+        default="",
+        description=f"Extra folders media_import_path may read, separated by {os.pathsep!r}. "
+        "The data directory's inbox is always allowed.",
+    )
+    egress: str = Field(
+        default="auto",
+        description="How URLs are fetched: direct (connections pinned to vetted addresses), proxy (through the "
+        "environment's proxy; weaker checks), off, or auto (proxy if the environment sets one).",
+    )
+
     # Budget (estimates; 1 credit = 0.001 USD). These are the hard limits: nothing a tool
     # caller passes can raise them.
     initial_credits: int = Field(default=10_000, ge=0, description="Opening balance of a new data directory.")
@@ -57,6 +69,10 @@ class Settings(BaseSettings):
         if unknown:
             raise ValueError(f"unknown tool families: {unknown}; known: {list(ALL_FAMILIES)}")
         return tuple(name for name in ALL_FAMILIES if name in names)
+
+    @property
+    def import_root_paths(self) -> tuple[Path, ...]:
+        return tuple(Path(p).expanduser() for p in self.import_roots.split(os.pathsep) if p.strip())
 
     @property
     def catalog_paths(self) -> tuple[Path, ...]:

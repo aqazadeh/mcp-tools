@@ -24,6 +24,7 @@ from mcp_tools.core.ids import is_id, new_id
 from mcp_tools.core.jobs.runner import ChangeSignal, Runner
 from mcp_tools.core.jobs.views import JobView, MediaView, job_view, media_view
 from mcp_tools.core.media.service import MediaRow, MediaService
+from mcp_tools.core.pagination import Page, PageRequest, encode_cursor
 from mcp_tools.core.principal import Principal
 from mcp_tools.db.schema import ACTIVE_JOB_STATUSES, jobs
 from mcp_tools.db.store import Store
@@ -418,6 +419,37 @@ class JobService:
                 views.append(job_view(row, [self.media_view(m) for m in outputs.get(job_id, [])]))
         return views
 
+    async def history(
+        self,
+        page: PageRequest,
+        *,
+        principal: Principal,
+        output_type: str | None = None,
+        only_completed: bool = False,
+        folder_id: str | None = None,
+    ) -> Page[JobView]:
+        """Newest first, keyset-paginated on the (time-sortable) id."""
+        query = select(jobs.c.id).where(jobs.c.workspace_id == principal.workspace_id)
+        if output_type:
+            query = query.where(jobs.c.output_type == output_type)
+        if only_completed:
+            query = query.where(jobs.c.status == "completed")
+        if folder_id:
+            query = query.where(jobs.c.folder_id == folder_id)
+        before = (page.cursor or {}).get("before")
+        if isinstance(before, str):
+            query = query.where(jobs.c.id < before)
+        async with self._store.read_tx() as conn:
+            ids = list((await conn.execute(query.order_by(jobs.c.id.desc()).limit(page.limit + 1))).scalars())
+        has_more = len(ids) > page.limit
+        ids = ids[: page.limit]
+        views = await self.get(ids, principal=principal) if ids else []
+        return Page(
+            items=views,
+            has_more=has_more,
+            next_cursor=encode_cursor({"before": ids[-1]}) if has_more and ids else None,
+        )
+
     async def wait(self, job_ids: list[str], *, timeout: float, principal: Principal) -> WaitResult:
         """Long-poll: return when every job is terminal or the time is up. Reads only."""
         if not job_ids or len(job_ids) > MAX_WAIT_JOBS:
@@ -446,13 +478,13 @@ class JobService:
             poll_after = int(min(10, max(2, round((soonest - now) / 1000))))
         return WaitResult(jobs=views, all_terminal=all_terminal, poll_after_seconds=poll_after)
 
-    async def cancel(self, job_id: str, *, principal: Principal) -> tuple[JobView, int]:
-        """Request cancellation. Returns the view and the credits refunded right away."""
+    async def cancel(self, job_id: str, *, principal: Principal) -> tuple[JobView, int, bool]:
+        """Request cancellation. Returns the view, the credits refunded right away, and whether it was unfinished."""
         if not is_id(job_id, "job"):
             raise ApiError(NOT_FOUND, f"no job with id {job_id!r}", hint="Use a job_id returned by a generate tool.")
         now = self._clock.now_ms()
 
-        async def unit(conn: AsyncConnection) -> int | None:
+        async def unit(conn: AsyncConnection) -> tuple[int, bool] | None:
             row = (
                 (
                     await conn.execute(
@@ -467,7 +499,7 @@ class JobService:
             if row is None:
                 return None
             if row["status"] not in ACTIVE_JOB_STATUSES:
-                return 0
+                return 0, False
             unleased = row["lease_owner"] is None or (row["lease_expires_at"] or 0) <= now
             if row["status"] == "queued" and unleased:
                 # Nothing was sent to a provider yet: cancel here and now.
@@ -486,17 +518,20 @@ class JobService:
                     )
                 )
                 if changed.rowcount == 1:
-                    return await self._ledger.refund(conn, principal.workspace_id, Ref("job", job_id), note="canceled")
+                    refund = await self._ledger.refund(
+                        conn, principal.workspace_id, Ref("job", job_id), note="canceled"
+                    )
+                    return refund, True
             await conn.execute(
                 update(jobs)
                 .where(jobs.c.id == job_id, jobs.c.status.in_(ACTIVE_JOB_STATUSES))
                 .values(cancel_requested_at=now, updated_at=now)
             )
-            return 0
+            return 0, True
 
-        refunded = await self._store.write(unit, after_commit=lambda _r: self._runner.poke(job_id))
-        if refunded is None:
+        outcome = await self._store.write(unit, after_commit=lambda _r: self._runner.poke(job_id))
+        if outcome is None:
             raise ApiError(NOT_FOUND, f"no job with id {job_id!r}", hint="Use a job_id returned by a generate tool.")
         self._signal.fire()
         (view,) = await self.get([job_id], principal=principal)
-        return view, refunded
+        return view, outcome[0], outcome[1]
