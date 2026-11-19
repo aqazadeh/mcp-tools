@@ -18,7 +18,7 @@ from mcp_tools.core.platform import Platform
 from mcp_tools.server.http.signing import Signer
 
 UPLOAD_TIMEOUT_SECONDS = 600.0
-_RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_RANGE = re.compile(r"^bytes=(\d{0,18})-(\d{0,18})$")
 _SAFE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "sandbox; default-src 'none'",

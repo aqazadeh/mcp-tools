@@ -14,11 +14,14 @@ from mcp_tools.core.errors import INVALID_PARAMS, PROVIDER_UNAVAILABLE, ApiError
 from mcp_tools.core.platform import Platform
 from mcp_tools.server.envelope import platform_of
 from mcp_tools.server.families.generate import IDEMPOTENCY, MAX_CREDITS, SPEND, WAIT, GenerateResult, run_generation
-from mcp_tools.server.params import require_choice
 from mcp_tools.server.registry import ToolDef
 
 _IMAGE = Field(description="The image to process: a media id (med_...) or the job id of a finished image job.")
-_MODEL = Field(description="Optional model id for this task; by default the first available one.", max_length=64)
+_MODEL = Field(
+    description="Optional model id for this task (models_explore action 'search' shows them with a `task` field); "
+    "by default the first available one.",
+    max_length=64,
+)
 
 
 def _model_for(platform: Platform, task: Any, wanted: str) -> str:
@@ -45,7 +48,8 @@ async def upscale_image(
     idempotency_key: Annotated[str, IDEMPOTENCY] = "",
     wait_seconds: Annotated[int, WAIT] = 0,
 ) -> Annotated[CallToolResult, GenerateResult]:
-    require_choice("scale", str(scale), ("2", "4"))
+    if scale not in (2, 4):
+        raise ApiError(INVALID_PARAMS, f"scale must be 2 or 4, got {scale!r}", hint="Use 2 or 4.", allowed=[2, 4])
     platform = platform_of(ctx)
     model_id = _model_for(platform, "upscale", model)
     params: dict[str, Any] = {"model": model_id, "medias": [{"role": "image", "value": image_id}]}

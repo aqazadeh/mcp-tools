@@ -100,8 +100,8 @@ async def projects_list(
 
 async def projects_create(
     ctx: Context,
-    name: Annotated[str, Field(description="Project name, 1-100 characters.", max_length=200)],
-    description: Annotated[str, Field(description="Optional note on what the project is for.", max_length=2000)] = "",
+    name: Annotated[str, Field(description="Project name, 1-100 characters.", max_length=100)],
+    description: Annotated[str, Field(description="Optional note on what the project is for.", max_length=1000)] = "",
     idempotency_key: Annotated[
         str, Field(description="Optional. Reuse the same key when retrying after a timeout.", max_length=128)
     ] = "",
@@ -122,7 +122,7 @@ async def projects_create(
 async def projects_update(
     ctx: Context,
     project_id: Annotated[str, _PROJECT_ID],
-    name: Annotated[str, Field(description="New name; omit to keep.", max_length=200)] = "",
+    name: Annotated[str, Field(description="New name; omit to keep.", max_length=100)] = "",
     description: Annotated[str | None, Field(description="New description; empty string clears it.")] = None,
     archived: Annotated[bool | None, Field(description="true archives (hides) the project; false restores it.")] = None,
 ) -> Annotated[CallToolResult, ProjectResult]:
@@ -136,9 +136,7 @@ async def projects_update(
 async def projects_delete(
     ctx: Context,
     project_id: Annotated[str, _PROJECT_ID],
-    confirm_delete: Annotated[
-        bool, Field(description="Must be true. Set it only after the user agreed.", json_schema_extra={"const": True})
-    ] = False,
+    confirm_delete: Annotated[bool, Field(description="Must be true. Set it only after the user agreed.")] = False,
 ) -> Annotated[CallToolResult, DeletedResult]:
     platform = platform_of(ctx)
     _confirmed(confirm_delete, "confirm_delete", "deleting a project")
@@ -167,7 +165,7 @@ async def folders_create(
     parent_id: Annotated[
         str, Field(description="Parent folder (fld_...); a project's root_folder_id for the top level.")
     ],
-    name: Annotated[str, Field(description="Folder name, 1-100 characters, unique in its parent.", max_length=200)],
+    name: Annotated[str, Field(description="Folder name, 1-100 characters, unique in its parent.", max_length=100)],
 ) -> Annotated[CallToolResult, FolderResult]:
     platform = platform_of(ctx)
     return ok(
@@ -180,7 +178,7 @@ async def folders_create(
 async def folders_update(
     ctx: Context,
     folder_id: Annotated[str, _FOLDER_ID],
-    name: Annotated[str, Field(description="New name; omit to keep.", max_length=200)] = "",
+    name: Annotated[str, Field(description="New name; omit to keep.", max_length=100)] = "",
     parent_id: Annotated[str, Field(description="Move under this folder of the same project; omit to keep.")] = "",
 ) -> Annotated[CallToolResult, FolderResult]:
     platform = platform_of(ctx)
@@ -193,9 +191,7 @@ async def folders_update(
 async def folders_delete(
     ctx: Context,
     folder_id: Annotated[str, _FOLDER_ID],
-    confirm_delete: Annotated[
-        bool, Field(description="Must be true. Set it only after the user agreed.", json_schema_extra={"const": True})
-    ] = False,
+    confirm_delete: Annotated[bool, Field(description="Must be true. Set it only after the user agreed.")] = False,
 ) -> Annotated[CallToolResult, DeletedResult]:
     platform = platform_of(ctx)
     _confirmed(confirm_delete, "confirm_delete", "deleting a folder")
@@ -255,9 +251,7 @@ async def assets_move(
 async def assets_remove(
     ctx: Context,
     asset_ids: Annotated[list[str], Field(description="1-50 asset ids (ast_...) from assets_list.")],
-    confirm_remove: Annotated[
-        bool, Field(description="Must be true. Set it only after the user agreed.", json_schema_extra={"const": True})
-    ] = False,
+    confirm_remove: Annotated[bool, Field(description="Must be true. Set it only after the user agreed.")] = False,
 ) -> Annotated[CallToolResult, AssetChangeResult]:
     platform = platform_of(ctx)
     _confirmed(confirm_remove, "confirm_remove", "removing assets from a folder")

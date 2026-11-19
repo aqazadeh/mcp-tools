@@ -40,11 +40,13 @@ uv run mcp-tools serve --transport http --host 127.0.0.1 --port 8000
 
 - İlk açılışta üretilen API anahtarı bir kez stderr'e yazılır; diskte yalnızca SHA-256 özeti durur.
   Yenilemek için `mcp-tools key rotate`.
-- `--no-auth` yalnızca loopback'e bağlıyken ve ek host / genel URL tanımlı değilken kabul edilir.
+- `--no-auth` yalnızca loopback'e bağlıyken ve ek host / genel URL tanımlı değilken kabul edilir. Loopback kullanıcı
+  sınırı değildir: bu kipte makinedeki her kullanıcı ve süreç bütün araçları çağırabilir.
+- Ek host adı (`MCP_TOOLS_HTTP_ALLOWED_HOSTS`) ya da genel URL tanımlıysa sunucu "yerel değil" sayılır:
+  `media_import_path` ve `local_path` kapanır.
 - Loopback dışına bağlamak için TLS (`--tls-cert`, `--tls-key`) ya da önde TLS sonlandıran bir vekil ve
   `--insecure-http` gerekir. Dışarıdan erişilen adresi `MCP_TOOLS_PUBLIC_BASE_URL` ile verin: imzalı dosya
   bağlantıları isteğin `Host` başlığından değil bu adresten kurulur.
-- Loopback dışı kullanımda `media_import_path` ve sonuçlardaki `local_path` kapatılır.
 - claude.ai web bağlayıcıları OAuth bekler; statik Bearer başlığı kabul etmeyebilir. Bu sürüm OAuth sunmaz.
 
 Uç noktalar: `POST/GET/DELETE /mcp` (anahtar gerekir), `GET /files/{media_id}` ve `PUT /upload/{media_id}`

@@ -199,7 +199,10 @@ async def test_proxy_mode_checks_the_url_text_and_does_not_rewrite_it() -> None:
     f = fetcher(handler, egress="proxy")
     assert await fetch(f, "https://cdn.example.com/a") == b"p"
     assert seen[0].url.host == "cdn.example.com" and "sni_hostname" not in seen[0].extensions
-    for url in ("https://localhost/a", "https://intranet/a", "https://db.internal/a", "https://10.0.0.1/a"):
+    for url in (
+        "https://localhost/a", "https://intranet/a", "https://db.internal/a", "https://10.0.0.1/a",
+        "https://127.1/a", "https://0x7f.0.0.1/a", "https://10.1:8443/a", "https://2130706433/a", "https://host.7/a",
+    ):  # fmt: skip
         with pytest.raises(ApiError):
             await fetch(f, url)
     assert len(seen) == 1

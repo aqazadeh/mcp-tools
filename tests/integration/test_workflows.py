@@ -112,6 +112,13 @@ def test_unsafe_bundles_and_folders_are_refused(tmp_path: Path) -> None:
     (linked / "secret.md").symlink_to("/etc/hostname")
     assert "symbolic" in refused(linked.parent)
 
+    shared = bundle(tmp_path / "k", "x", **{"n.md": "text"})
+    os.chmod(shared / "n.md", 0o666)
+    assert "writable by others" in refused(shared.parent)
+    os.chmod(shared / "n.md", 0o600)
+    os.chmod(shared, 0o777)
+    assert "writable by others" in refused(shared.parent)
+
     open_folder = bundle(tmp_path / "j", "x").parent
     os.chmod(open_folder, 0o777)
     with pytest.raises(WorkflowError, match="writable by others"):

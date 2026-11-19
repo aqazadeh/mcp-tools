@@ -27,7 +27,8 @@ Ask where the pictures will be used: that decides the aspect ratio (square for m
 
 1. `remove_background` with the product's `media_id` gives the cutout (transparent PNG).
    It is also the first deliverable.
-2. `models_explore`, action `recommend`, type `image`, input `media`: choose a model that
+2. `models_explore`, action `recommend`, with `query` set to the goal (for example "product
+   photo from a reference image"), type `image`, input `media`: choose a model that
    accepts a reference image, then read it with action `get` to learn its media role.
 3. `projects_create` for the shoot; pass its `root_folder_id` as `params.folder_id` below.
 4. `estimate_cost` for the whole set and tell the user the total.

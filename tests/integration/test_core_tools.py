@@ -244,7 +244,9 @@ async def test_media_import_get_and_list(client: Client, built: Built) -> None:
     local = await _call(client, "media_import_path", {"path": str(inbox / "photo.png")})
     assert local["media"]["width"] == 20
     refused = error_of(await client.call_tool("media_import_path", {"path": str(built.platform.data.database)}))
-    assert refused["code"] == "invalid_params" and refused["allowed"] == [str(inbox)]
+    assert refused["code"] == "not_found" and refused["allowed"] == [str(inbox)]
+    missing = error_of(await client.call_tool("media_import_path", {"path": "/nonexistent/file.png"}))
+    assert {k: v for k, v in missing.items()} == refused  # existence outside the roots is not revealed
 
     result = await client.call_tool("media_get", {"media_id": media["media_id"], "include_preview": True})
     assert payload(result)["preview"] == "attached"
@@ -313,10 +315,40 @@ async def test_transforms_take_one_image_and_nothing_else(client: Client, built:
     cutout = await _call(client, "remove_background", {"image_id": job_id, "wait_seconds": 10})
     assert cutout["jobs"][0]["results"][0]["mime"] == "image/png"
 
-    assert error_of(await client.call_tool("upscale_image", {"image_id": job_id, "scale": 3}))["allowed"] == ["2", "4"]
+    assert error_of(await client.call_tool("upscale_image", {"image_id": job_id, "scale": 3}))["allowed"] == [2, 4]
     assert error_of(await client.call_tool("upscale_image", {"image_id": "med_nope"}))["code"] == "invalid_params"
     assert error_of(await client.call_tool("upscale_image", {"image_id": job_id, "prompt": "x"}))["code"] == (
         "unknown_argument"
     )
     wrong = error_of(await client.call_tool("upscale_image", {"image_id": job_id, "model": "mock_image"}))
     assert wrong["code"] == "invalid_params"
+
+
+async def test_argument_type_errors_use_the_json_envelope(client: Client, built: Built) -> None:
+    cases: list[tuple[str, dict[str, Any], str]] = [
+        ("generate_image", {"params": {**IMG, "count": "two"}}, "params.count"),
+        ("generate_image", {"params": {**IMG, "medias": ["med_123"]}}, "params.medias.0"),
+        ("generate_image", {"model": "mock_image", "prompt": "x"}, "params"),
+        ("generate_image", {"params": IMG, "max_credits": "lots"}, "max_credits"),
+        ("jobs_wait", {"job_ids": "job_x"}, "job_ids"),
+        ("folders_create", {"name": "x"}, "parent_id"),
+    ]
+    for tool, arguments, field in cases:
+        err = error_of(await client.call_tool(tool, arguments))
+        assert err["code"] == "invalid_params" and field in err["message"], (tool, err)
+        assert "pydantic" not in err["message"] and "input_value" not in err["message"] and tool in err["hint"]
+    assert await _count(built, jobs) == 0
+
+
+async def test_listings_identify_jobs_and_recommendations_match(client: Client) -> None:
+    await _call(client, "generate_image", {"params": {**IMG, "prompt": "a red fox " * 30}, "wait_seconds": 10})
+    (item,) = (await _call(client, "show_generations", {}))["items"]
+    assert item["prompt"].startswith("a red fox") and len(item["prompt"]) == 120 and item["created_at_ms"] > 0
+    assert error_of(await client.call_tool("show_generations", {"folder_id": "fld_" + "0" * 26}))["code"] == "not_found"
+
+    speech = await _call(client, "models_explore", {"action": "recommend", "query": "narration voice"})
+    assert all(m["output_type"] == "audio" for m in speech["items"]) and speech["hint"].startswith("Best match")
+    vague = await _call(client, "models_explore", {"action": "recommend", "query": "zzz qqq"})
+    assert vague["items"] and vague["hint"].startswith("No model matched")
+    video = await _call(client, "generate_video", {"params": {**VID, "duration": 4}})
+    assert "adjustments" not in video  # 4 -> 4 is not a correction worth reporting

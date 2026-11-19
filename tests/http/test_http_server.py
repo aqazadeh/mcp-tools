@@ -167,6 +167,8 @@ async def test_mcp_over_http_upload_generate_and_download(server: HttpServer) ->
         tail = await anonymous.get(download, headers={"Range": "bytes=-4"})
         assert tail.content == full.content[-4:]
         assert (await anonymous.get(download, headers={"Range": "bytes=99999999-"})).status_code == 416
+        huge = await anonymous.get(download, headers={"Range": "bytes=" + "9" * 5000 + "-"})
+        assert huge.status_code == 200 and huge.content == full.content  # an absurd range is ignored, not a 500
         assert (await anonymous.head(download)).headers["content-length"] == str(len(full.content))
         # a widget in an opaque origin may fetch a signed file
         assert (await anonymous.get(download, headers={"Origin": "null"})).status_code == 200
@@ -239,6 +241,15 @@ def test_unsafe_http_configurations_are_refused(tmp_path: Path) -> None:
     names = {d.name for d in public.built.tools}
     assert "media_import_path" not in names and "media_upload" in names
     assert public.built.platform.expose_local_paths is False
+
+
+def test_extra_host_names_make_the_server_non_local(tmp_path: Path) -> None:
+    tunnelled = build_http_server(
+        Settings(data_dir=tmp_path / "d", log_level="WARNING", api_key=KEY, http_allowed_hosts="studio.example.com")
+    )
+    assert "studio.example.com" in tunnelled.policy.hosts
+    assert "media_import_path" not in {d.name for d in tunnelled.built.tools}
+    assert tunnelled.built.platform.expose_local_paths is False
 
 
 def test_a_generated_key_is_stored_hashed_and_shown_once(tmp_path: Path) -> None:

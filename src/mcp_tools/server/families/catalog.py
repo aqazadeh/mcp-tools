@@ -78,7 +78,10 @@ async def models_explore(
             ModelsExploreResult(
                 action=action,
                 items=[catalog.public(m) for m in models],
-                hint="Best match first. Call action 'get' with the chosen id before building params.",
+                hint="Best match first. Call action 'get' with the chosen id before building params."
+                if models and catalog.matches(query, models[0])
+                else "No model matched the goal words; these are simply the available models, not a ranking. "
+                "Narrow with `type`, or use upscale_image / remove_background / apps_search for non-generation tasks.",
             )
         )
 

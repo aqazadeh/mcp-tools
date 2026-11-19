@@ -17,6 +17,7 @@ checks the URL text and is documented as weaker (`mcp-tools doctor` reports the 
 """
 
 import ipaddress
+import re
 import socket
 import urllib.request
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -146,8 +147,14 @@ class SafeFetcher:
         try:
             ipaddress.ip_address(host)
         except ValueError:
-            if "." not in host or host == "localhost" or host.endswith(_INTERNAL_SUFFIXES):
+            labels = host.split(".")
+            # "127.1", "0x7f.0.0.1" and "10.1" are not valid IP literals here, but resolvers accept them.
+            numeric = all(re.fullmatch(r"(0x[0-9a-f]*|[0-9]+)", label) for label in labels) or labels[-1].isdigit()
+            if "." not in host or numeric or host == "localhost" or host.endswith(_INTERNAL_SUFFIXES):
                 raise _refuse("the URL points to a local or internal host name") from None
+            if urllib.request.proxy_bypass(host):
+                # NO_PROXY would send this request straight out, with nothing checking the address.
+                raise _refuse("this host is excluded from the proxy and cannot be fetched safely") from None
         else:
             if not is_public_address(host):
                 raise _refuse("the URL points to a private, local or reserved address")

@@ -92,7 +92,8 @@ def build_http_server(
     signer = Signer(read_or_create_secret(data.signing_key_file))
     key_hash, new_key = (None, None) if no_auth else load_api_key_hash(data, settings)
 
-    local = loopback and not settings.public_base_url
+    # Extra host names mean a tunnel or a reverse proxy: the client is then not this machine.
+    local = loopback and not extra_hosts and not settings.public_base_url
     if platform is None:
         clock = SystemClock()
         platform = Platform(
@@ -140,7 +141,7 @@ def serve_http(
     out = sys.stderr
     print(f"mcp-tools: MCP endpoint {server.public_base_url}/mcp", file=out)
     if no_auth:
-        print("mcp-tools: authentication is OFF (loopback only)", file=out)
+        print("mcp-tools: authentication is OFF: any user or process on this machine can call every tool", file=out)
     elif server.new_api_key:
         print(f"mcp-tools: new API key (shown once, store it now): {server.new_api_key}", file=out)
         print("mcp-tools: clients send it as  Authorization: Bearer <key>", file=out)

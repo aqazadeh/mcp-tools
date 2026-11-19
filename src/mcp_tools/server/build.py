@@ -25,7 +25,7 @@ from mcp_tools.server.envelope import guard
 from mcp_tools.server.instructions import build_instructions
 from mcp_tools.server.registry import Capabilities, RegistryError, ToolDef, collect, validate_defs
 from mcp_tools.server.ui.resources import WIDGETS
-from mcp_tools.server.visibility import AppsVisibility
+from mcp_tools.server.visibility import AppsVisibility, ValidationEnvelope
 
 SERVER_NAME = "mcp-tools"
 LEGACY_UI_META_KEY = "ui/resourceUri"  # older hosts read the flat key; the SDK writes only the nested one
@@ -113,7 +113,7 @@ def build_server(
         version=__version__,
         instructions=build_instructions(families),
         extensions=[apps],
-        middleware=[AppsVisibility(d.name for d in defs if d.visibility == ("app",))],
+        middleware=[ValidationEnvelope(), AppsVisibility(d.name for d in defs if d.visibility == ("app",))],
         lifespan=lifespan,
         log_level=settings.log_level.upper(),  # type: ignore[arg-type]
     )

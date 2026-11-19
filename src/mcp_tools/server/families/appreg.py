@@ -93,7 +93,6 @@ async def apps_invoke(
         bool,
         Field(
             description="Must be true for actions marked destructive. Set it only after the user agreed.",
-            json_schema_extra={"const": True},
         ),
     ] = False,
 ) -> Annotated[CallToolResult, AppInvokeResult]:
@@ -174,9 +173,10 @@ def tools() -> list[ToolDef]:
             description=(
                 "Run one action of an app with arguments that match its schema from apps_describe. Pass that "
                 "call's manifest_revision; if the app changed since, the call is refused and nothing runs. "
-                "Actions that spend credits obey max_credits like the generate tools (approval_required means "
-                "nothing was created). Destructive actions need confirm_destructive: true after the user "
-                "agreed. A result with status running is followed with the app's own status action."
+                "Actions that spend credits obey max_credits and idempotency_key like the generate tools "
+                "(approval_required means nothing was created); free actions ignore both. Destructive actions "
+                "need confirm_destructive: true after the user agreed. A result with status running is followed "
+                "with the app's own status action."
             ),
             annotations=ToolAnnotations(
                 read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True

@@ -205,8 +205,13 @@ class Catalog:
             _, score = self._score(model, words)
             # A model the server cannot run is no recommendation, and a placeholder is the last resort.
             ranked.append((not self.availability(model).available, model.provider == "mock", -score, model.id, model))
+        if any(entry[2] < 0 for entry in ranked):
+            ranked = [entry for entry in ranked if entry[2] < 0]  # something matched: drop what did not
         ranked.sort(key=lambda entry: entry[:4])
         return [entry[4] for entry in ranked[:limit]]
+
+    def matches(self, query: str, model: ModelSpec) -> bool:
+        return self._score(model, _tokens(query))[1] > 0
 
     def by_task(self, task: Task) -> list[ModelSpec]:
         return self._filtered(type=None, input=None, task=task)

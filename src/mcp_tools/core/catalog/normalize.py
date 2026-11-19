@@ -137,7 +137,13 @@ def _coerce(spec: ParamSpec, value: Any, model: ModelSpec, out: NormalizedReques
                     model=model,
                 )
             value = match
-    if value != original or type(value) is not type(original):
+    same_number = (
+        isinstance(value, (int, float))
+        and isinstance(original, (int, float))
+        and not isinstance(original, bool)
+        and value == original
+    )
+    if (value != original or type(value) is not type(original)) and not same_number:
         _adjust(out, spec.name, original, value, "coerced to the nearest value the model accepts")
     return value
 

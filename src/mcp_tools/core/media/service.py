@@ -386,7 +386,7 @@ class MediaService:
             raise ApiError(
                 NOT_FOUND,
                 f"no media with id {media_id!r}",
-                hint="Use an id returned by a media or generate tool.",
+                hint="Use a media id (med_...). For a job, take results[].media_id from jobs_wait or show_jobs.",
                 recovery_tool="media_list",
             )
         return rows[0]

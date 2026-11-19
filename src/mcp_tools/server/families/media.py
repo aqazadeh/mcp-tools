@@ -82,7 +82,11 @@ async def media_list(
     ctx: Context,
     kind: Annotated[str, choice("Only this kind; omit for all.", KINDS)] = "",
     source: Annotated[
-        str, choice("imported: files brought in; generated: job outputs. Omit for both.", ("imported", "generated"))
+        str,
+        choice(
+            "generated: outputs of generation jobs; imported: everything else (imports, uploads, app results).",
+            ("imported", "generated"),
+        ),
     ] = "",
     limit: Annotated[int, Field(description="Page size, 1-50 (default 20).")] = 0,
     cursor: Annotated[str, Field(description="next_cursor from the previous page; keep the same filters.")] = "",

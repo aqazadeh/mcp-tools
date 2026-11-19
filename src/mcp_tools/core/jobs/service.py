@@ -203,7 +203,8 @@ class JobService:
             raise ApiError(
                 INVALID_PARAMS,
                 f"model {model.id} is a {model.task} model and cannot be used here",
-                hint="Use a model listed by models_explore for generation.",
+                hint=f"Use a {task} model: omit `model` on single-purpose tools, or find one with models_explore "
+                f"action 'search' (items there carry task: '{task}' unless they are generation models).",
                 recovery_tool="models_explore",
             )
         if output_type is not None and model.output_type != output_type:

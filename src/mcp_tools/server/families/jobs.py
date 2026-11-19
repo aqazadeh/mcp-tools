@@ -114,6 +114,8 @@ async def show_generations(
     cursor: Annotated[str, Field(description="next_cursor from the previous page; keep the same filters.")] = "",
 ) -> Annotated[CallToolResult, GenerationsResult]:
     platform = platform_of(ctx)
+    if folder_id:
+        await platform.projects.require_folder(folder_id, platform.principal)
     page = await platform.jobs.history(
         page_request(limit, cursor),
         principal=platform.principal,

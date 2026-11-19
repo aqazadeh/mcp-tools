@@ -83,17 +83,22 @@ def _front_matter(text: str, where: str) -> tuple[dict[str, Any], str]:
     return meta, body.strip()
 
 
-def _walk(root: Traversable, prefix: str = "", depth: int = 0) -> Iterable[tuple[str, Traversable]]:
+def _walk(
+    root: Traversable, prefix: str = "", depth: int = 0, *, check_owner: bool = False
+) -> Iterable[tuple[str, Traversable]]:
     if depth > MAX_DEPTH:
         raise WorkflowError(f"{prefix}: bundle folders are nested too deeply")
     for entry in sorted(root.iterdir(), key=lambda e: e.name):
         name = entry.name
         if name.startswith(".") or name == "__pycache__":
             continue
-        if isinstance(entry, Path) and entry.is_symlink():
-            raise WorkflowError(f"{prefix}{name}: symbolic links are not allowed in a bundle")
+        if isinstance(entry, Path):
+            if entry.is_symlink():
+                raise WorkflowError(f"{prefix}{name}: symbolic links are not allowed in a bundle")
+            if check_owner:
+                _check_private(entry, f"{prefix}{name}")
         if entry.is_dir():
-            yield from _walk(entry, f"{prefix}{name}/", depth + 1)
+            yield from _walk(entry, f"{prefix}{name}/", depth + 1, check_owner=check_owner)
         elif entry.is_file():
             yield f"{prefix}{name}", entry
 
@@ -101,7 +106,9 @@ def _walk(root: Traversable, prefix: str = "", depth: int = 0) -> Iterable[tuple
 def load_bundle(root: Traversable, *, folder_name: str, builtin: bool) -> Workflow:
     files: dict[str, WorkflowFile] = {}
     total = 0
-    for relative, entry in _walk(root):
+    if not builtin and isinstance(root, Path):
+        _check_private(root, folder_name)
+    for relative, entry in _walk(root, check_owner=not builtin):
         if not relative.lower().endswith(ALLOWED_SUFFIXES):
             raise WorkflowError(f"{folder_name}/{relative}: only {', '.join(ALLOWED_SUFFIXES)} files are allowed")
         raw = entry.read_bytes()
@@ -137,6 +144,15 @@ def load_bundle(root: Traversable, *, folder_name: str, builtin: bool) -> Workfl
         digest=digest,
         builtin=builtin,
     )
+
+
+def _check_private(path: Path, where: str) -> None:
+    """Every file and folder of a user bundle must be the user's own and writable by nobody else."""
+    info = path.lstat()
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise WorkflowError(f"{where}: belongs to another user")
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise WorkflowError(f"{where}: is writable by others; run: chmod -R go-w on the workflow folder")
 
 
 def check_user_directory(directory: Path) -> Path:

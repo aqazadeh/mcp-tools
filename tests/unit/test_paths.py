@@ -88,10 +88,35 @@ def test_errors_list_the_allowed_roots_but_not_what_exists_outside(root: Path, t
     with pytest.raises(ApiError) as missing:
         read(tmp_path / "does-not-exist.png", root)
     assert outside.value.allowed == [str(root)]
-    assert "outside.png" not in outside.value.message and "does-not-exist" not in missing.value.message
+    assert outside.value.message == missing.value.message and outside.value.code == missing.value.code
 
 
 def test_overbroad_roots_are_rejected() -> None:
     for bad in (Path("/"), Path.home()):
         with pytest.raises(RootError):
             validate_roots([bad])
+
+
+def test_hard_links_and_swapped_directories_are_refused(root: Path, tmp_path: Path) -> None:
+    os.link(tmp_path / "outside.png", root / "alias.png")  # a second name for a file outside the root
+    with pytest.raises(ApiError):
+        read(root / "alias.png", root)
+
+    from mcp_tools.core.media import paths
+
+    # A directory replaced by a symlink between the check and the open must not be followed.
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "deep.png").write_bytes(b"stolen")
+    (root / "sub").rename(root / "sub.real")
+    (root / "sub").symlink_to(tmp_path / "elsewhere")
+    with pytest.raises((NotADirectoryError, OSError), match=r"(?i)not a directory|symbolic|loop"):
+        os.close(paths._open_beneath(root, ("sub", "deep.png")))
+
+
+def test_missing_outside_and_hidden_look_the_same(root: Path, tmp_path: Path) -> None:
+    errors = []
+    for path in (tmp_path / "outside.png", tmp_path / "missing.png", root / ".env", root / "missing.png", "~root/x"):
+        with pytest.raises(ApiError) as caught:
+            read(path, root)
+        errors.append((caught.value.code, caught.value.message) if str(path) != "~root/x" else None)
+    assert len({e for e in errors if e}) == 1

@@ -55,6 +55,7 @@ class JobView:
     error: dict[str, Any] | None = None
     results: list[MediaView] = field(default_factory=list)
     created_at: int | None = None
+    prompt: str | None = None
     next_poll_at: int | None = None
 
     @property
@@ -63,13 +64,23 @@ class JobView:
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"job_id": self.job_id, "status": self.status}
-        for name in ("model", "output_type", "progress", "credits", "error"):
+        for name in ("model", "output_type", "prompt", "progress", "credits", "error"):
             value = getattr(self, name)
             if value is not None:
                 out[name] = value
+        if self.created_at is not None:
+            out["created_at_ms"] = self.created_at
         if self.results:
             out["results"] = [r.to_dict() for r in self.results]
         return out
+
+
+def _brief_prompt(params: Any) -> str | None:
+    """Enough of the prompt to tell jobs apart in a list."""
+    prompt = params.get("prompt") if isinstance(params, dict) else None
+    if not isinstance(prompt, str) or not prompt:
+        return None
+    return prompt if len(prompt) <= 120 else prompt[:117] + "..."
 
 
 def job_view(row: Any, results: list[MediaView]) -> JobView:
@@ -90,5 +101,6 @@ def job_view(row: Any, results: list[MediaView]) -> JobView:
         error=error,
         results=results,
         created_at=row["created_at"],
+        prompt=_brief_prompt(row["params_json"]),
         next_poll_at=row["next_poll_at"],
     )

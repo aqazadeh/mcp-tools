@@ -81,7 +81,7 @@ async def cancel(ctx: AppContext, args: JsonDict) -> ActionResult:
         _view, credits, was_active = await ctx.jobs.cancel(job_id, principal=ctx.principal)
         refunded += credits
         stopped += int(was_active)
-    return ActionResult({"cancel_requested_for": stopped, "refunded_so_far": refunded})
+    return ActionResult({"run_id": args["run_id"], "cancel_requested_for": stopped, "refunded_so_far": refunded})
 
 
 _RUN = {

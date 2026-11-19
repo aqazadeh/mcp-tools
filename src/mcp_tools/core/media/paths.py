@@ -37,42 +37,65 @@ def validate_roots(roots: Sequence[Path]) -> tuple[Path, ...]:
 
 
 def _refuse(roots: Sequence[Path]) -> ApiError:
+    # One answer for "missing", "outside the roots" and "hidden": a caller must not be able to
+    # use this tool to find out which files exist elsewhere on the disk.
     return ApiError(
-        INVALID_PARAMS,
-        "the path is outside the folders this server may read",
-        hint="Ask the user to put the file in one of the allowed folders, then pass its full path.",
+        NOT_FOUND,
+        "no importable file at that path",
+        hint="The file must exist inside one of the allowed folders; pass its full path.",
         allowed=[str(r) for r in roots],
     )
+
+
+def _open_beneath(root: Path, parts: Sequence[str]) -> int:
+    """Open root/parts without following a symlink in any component.
+
+    The path was already resolved, so it holds no symlinks; if one shows up now, something
+    swapped a directory between the check and the open, and the open fails.
+    """
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    last_flags = os.O_RDONLY | nofollow | cloexec | getattr(os, "O_NONBLOCK", 0)
+    if os.open not in os.supports_dir_fd or not hasattr(os, "O_DIRECTORY"):
+        return os.open(root.joinpath(*parts), last_flags)
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | cloexec)
+    try:
+        for part in parts[:-1]:
+            deeper = os.open(part, os.O_RDONLY | os.O_DIRECTORY | nofollow | cloexec, dir_fd=directory)
+            os.close(directory)
+            directory = deeper
+        return os.open(parts[-1], last_flags, dir_fd=directory)
+    finally:
+        os.close(directory)
 
 
 def open_confined(path: str, roots: Sequence[Path], max_bytes: int) -> tuple[int, Path, int]:
     """Return (file descriptor, resolved path, size). Blocking; call it in a worker thread."""
     if not path or "\x00" in path:
         raise ApiError(INVALID_PARAMS, "path is empty or malformed", hint="Pass the absolute path of one file.")
-    candidate = Path(path).expanduser()
+    candidate = Path(path)  # no ~ expansion: that would turn the tool into a user-name probe
     if not candidate.is_absolute():
         raise ApiError(INVALID_PARAMS, "path must be absolute", hint="Pass the full path of the file.")
     try:
         resolved = candidate.resolve(strict=True)
     except (OSError, RuntimeError):
-        # Do not reveal whether something exists outside the roots.
-        raise ApiError(
-            NOT_FOUND, "no readable file at that path", hint="Check the path.", allowed=[str(r) for r in roots]
-        ) from None
+        raise _refuse(roots) from None
     root = next((r for r in roots if resolved.is_relative_to(r) and resolved != r), None)
     if root is None:
         raise _refuse(roots)
-    if any(part.startswith(".") for part in resolved.relative_to(root).parts):
+    parts = resolved.relative_to(root).parts
+    if any(part.startswith(".") for part in parts):
         raise _refuse(roots)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        fd = os.open(resolved, flags)
+        fd = _open_beneath(root, parts)
     except OSError:
-        raise ApiError(NOT_FOUND, "no readable file at that path", hint="Check the path and its permissions.") from None
+        raise _refuse(roots) from None
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise ApiError(INVALID_PARAMS, "the path is not a regular file", hint="Pass the path of one media file.")
+        if info.st_nlink > 1:  # a hard link may be a second name for a file that lives outside the roots
+            raise _refuse(roots)
         if info.st_size > max_bytes:
             raise ApiError(
                 QUOTA_EXCEEDED,

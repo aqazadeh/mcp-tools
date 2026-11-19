@@ -18,7 +18,8 @@ prompt. Show the list to the user and adjust it until they agree. See `shot-list
 
 ## 2. Pick models and price it
 
-1. `models_explore` with action `recommend`, type `image`, then type `video` with input `media`
+1. `models_explore` with action `recommend` and `query` set to the goal, type `image`; then the
+   same with type `video` and input `media`
    (the video model must accept a start image). Read each chosen model with action `get`.
 2. `estimate_cost` with one request per still and one per clip. Tell the user the total.
 3. `projects_create` for the film; keep its `root_folder_id` and pass it as `params.folder_id`

@@ -36,6 +36,7 @@ providers/   Replicate · OpenAI · mock        db/  SQLite (SQLAlchemy Core)   
 - Her araç `Annotated[CallToolResult, Model]` döner. Başarı: null'suz kompakt JSON metni + çıktı şemasına
   uyan `structured_content`. Hata: `is_error` + `{"error": {code, message, hint, recovery_tool, retryable}}`.
 - İşleyiciler `ToolError` fırlatmaz (SDK metnin başına ek koyar ve JSON bozulur); `guard` `ApiError`'u zarfa çevirir.
+- SDK'nın işleyiciden önce yaptığı tip doğrulamasının hataları da aynı zarfa çevrilir (`server/visibility.py`).
 - Bilinmeyen üst düzey argüman reddedilir (`unknown_argument`): SDK bunları sessizce atar, yanlış yazılmış
   bir `max_credits` böylece kaybolurdu.
 - Modele özel parametreler `params` içinde geçer; bilinmeyen anahtar, yanlış tip ve bilinmeyen model hatadır.

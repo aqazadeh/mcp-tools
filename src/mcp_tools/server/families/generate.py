@@ -109,6 +109,7 @@ async def run_generation(
 
     refs = [JobRef(index=position, job_id=job.job_id, status="queued") for position, job in enumerate(outcome.jobs)]
     next_step: NextStep | None = NextStep(tool="jobs_wait", after_seconds=2, hint="Pass these job_ids to jobs_wait.")
+    note: str | None = None
     if wait_seconds > 0 or outcome.replayed:
         # The jobs are committed and paid for: from here on nothing may turn the answer into an
         # error, or the caller would lose the job ids. A replay reads the jobs' current state.
@@ -130,6 +131,10 @@ async def run_generation(
                 if waited.all_terminal
                 else NextStep(tool="jobs_wait", after_seconds=waited.poll_after_seconds or 2)
             )
+            if any(view.terminal and view.status != "completed" for view in waited.jobs):
+                note = "Jobs that did not complete were refunded; `credits.balance` is the balance now."
+                async with platform.store.read_tx() as conn:
+                    outcome.balance = (await platform.ledger.balance(conn, platform.principal.workspace_id)).balance
     return ok(
         GenerateResult(
             status="submitted",
@@ -141,7 +146,7 @@ async def run_generation(
             next=next_step,
             message="Replay of an earlier identical call: these are its jobs; nothing new was charged."
             if outcome.replayed
-            else None,
+            else note,
         )
     )
 
@@ -224,7 +229,11 @@ async def generate_audio(
 
 
 class BatchRequest(Wire):
-    index: int | None = Field(default=None, description="Your own number for this request; echoed in the result.")
+    index: int | None = Field(
+        default=None,
+        description="Your own number for this request, echoed in the result. Defaults to its position (0-based); "
+        "give it for every request or for none.",
+    )
     params: dict[str, Any] = Field(description="Same shape as the `params` of a generate tool (model, prompt, …).")
 
 
